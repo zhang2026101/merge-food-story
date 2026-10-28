@@ -1,0 +1,140 @@
+{
+  "logicResolution": {
+    "w": 1120,
+    "h": 660
+  },
+  "fit": {
+    "height": 660,
+    "minAspect": 1.697,
+    "maxAspect": 2.35,
+    "note": "舞台高度固定 660 逻辑像素，宽度随视口宽高比在 1120~1551 之间伸缩（夹在 minAspect/maxAspect 内），因此横屏手机 / 桌面都能铺满且不溢出。宽高比低于 minAspect（竖屏或 4:3 窗口）时按 minAspect 等比缩放并留边。"
+  },
+  "sizing": {
+    "hudH": 56,
+    "opW": 470,
+    "shelfH": 96,
+    "ingsH": 128,
+    "gap": 8,
+    "pad": 10,
+    "stationSlot": 82,
+    "storeSlot": 64,
+    "ingCols": 7
+  },
+  "regions": [
+    {
+      "id": "hud",
+      "rect": [
+        0,
+        0,
+        1120,
+        56
+      ],
+      "content": "金币 / 周·日·模式 / 连击 / 配方书·升级·暂停"
+    },
+    {
+      "id": "queue",
+      "rect": [
+        10,
+        64,
+        620,
+        340
+      ],
+      "content": "店铺招牌 + 今日菜单 + 顾客火柴人与气泡（3/4 站位，由 pace.maxQueue 驱动）"
+    },
+    {
+      "id": "operation",
+      "rect": [
+        640,
+        64,
+        470,
+        340
+      ],
+      "content": "食物台 / 饮品甜品台，上下堆叠（加冰开关已随 v1.4 移除，冰为基础材料）"
+    },
+    {
+      "id": "storageRow",
+      "rect": [
+        10,
+        412,
+        700,
+        96
+      ],
+      "content": "主仓储架（普通 5 / 困难 5 格，见 config.storage.capByDiff）"
+    },
+    {
+      "id": "bufferRow",
+      "_deprecated": true,
+      "rect": [
+        720,
+        412,
+        390,
+        96
+      ],
+      "content": "【已下线】备料缓冲（原 6 格）——该机制已移除，主仓储为唯一仓库；字段仅作历史留档，不要据此实现 UI"
+    },
+    {
+      "id": "trash",
+      "rect": "主仓储行右侧角",
+      "content": "垃圾桶（角标 Lv）+ 失败品免冷却提示"
+    },
+    {
+      "id": "ingredientArea",
+      "rect": [
+        10,
+        516,
+        1100,
+        128
+      ],
+      "content": "叶食材按钮 7 列 × 2 行（14 种，见 sizing.ingCols）；当日菜单无关的置灰"
+    },
+    {
+      "id": "upgradeEntry",
+      "rect": "HUD 右侧",
+      "content": "「升级」按钮，点开设备面板（含首级无返还标注）"
+    },
+    {
+      "id": "pauseButton",
+      "rect": "HUD 右侧（升级旁）",
+      "content": "「暂停」按钮，点击全场冻结"
+    },
+    {
+      "id": "iceSwitch",
+      "_deprecated": true,
+      "rect": "饮品甜品台标题行",
+      "content": "【已下线】加冰开关——v1.4 起冰是基础材料（cola + ice = icedCola），不再有开关"
+    },
+    {
+      "id": "recipeBook",
+      "rect": "覆盖操作区+仓储的浮层",
+      "content": "常驻「已知配方」，默认收起；C6 高亮当日相关配方"
+    },
+    {
+      "id": "comboHud",
+      "rect": "HUD 左区",
+      "content": "当前连击数与奖励上限（E11）"
+    }
+  ],
+  "visual": {
+    "style": "简笔画/线条插画：描边 #2B2B2B 2.5px 圆角端点；填充纯色或留白，禁渐变/禁粒子特效",
+    "typeScale": {
+      "hudNumber": 30,
+      "hudLabel": 20,
+      "button": 20,
+      "stationName": 24,
+      "ingredientName": 20,
+      "ingredientCost": 16,
+      "modalTitle": 32,
+      "modalBody": 20,
+      "note": "以上为 660 逻辑高度下的字号；实际像素 = 字号 × (视口高 / 660)，横屏手机上约 0.59 倍。"
+    },
+    "foodDrinkImg": "随槽位尺寸自适应（内联 SVG，无位图）",
+    "ingredientImg": "44×44 逻辑像素（内联 SVG）",
+    "customerImg": "火柴人身体 6 款 + 配饰 6 款叠加层（内联 SVG）",
+    "allowedMotion": [
+      "≤200ms 淡入/弹回/置灰过渡",
+      "读条宽度变化",
+      "颜色切换",
+      "升级面板展开/角标刷新"
+    ]
+  }
+}

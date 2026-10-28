@@ -1,0 +1,229 @@
+{
+  "meta": {
+    "based_on": "PRD-COOK-002 v1.1 §4.3 合成表",
+    "matching": "unorderedSet（两输入顺序不影响匹配）",
+    "costSemantics": {
+      "thisCost": "本次合成投料时立即从 coins 扣除的金币（中间产物已沉没成本不重复扣）",
+      "chainCost": "该产物从所有叶食材起算的总成本，用于核算净收益"
+    },
+    "note": "v1.4：茶升级为商品；冰淇淋改为牛奶+糖浆合成；移除加冰开关（冰是基础材料）"
+  },
+  "recipes": [
+    {
+      "id": "burger",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "bread",
+        "patty"
+      ],
+      "price": 8,
+      "thisCost": 3,
+      "chainCost": 3,
+      "net": 5
+    },
+    {
+      "id": "vegPatty",
+      "type": "intermediate",
+      "station": "food",
+      "inputs": [
+        "lettuce",
+        "patty"
+      ],
+      "price": null,
+      "thisCost": 3,
+      "chainCost": 3,
+      "net": 0,
+      "note": "中间产物，可再投料、不可售卖（不可售 → 净利恒为 0）"
+    },
+    {
+      "id": "signatureBurger",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "bread",
+        "vegPatty"
+      ],
+      "price": 11,
+      "thisCost": 1,
+      "chainCost": 4,
+      "net": 7,
+      "note": "本次仅扣面包1（vegPatty已沉没3）；汉堡分层，困难模式刚需"
+    },
+    {
+      "id": "fries",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "potato",
+        "potato"
+      ],
+      "price": 5,
+      "thisCost": 2,
+      "chainCost": 2,
+      "net": 3
+    },
+    {
+      "id": "cola",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "syrup",
+        "water"
+      ],
+      "price": 4,
+      "thisCost": 2,
+      "chainCost": 2,
+      "net": 2
+    },
+    {
+      "id": "icedCola",
+      "type": "drink",
+      "station": "drink",
+      "price": 6,
+      "chainCost": 3,
+      "net": 3,
+      "equivalence": {
+        "acceptsForOrder": "cola",
+        "settlementByActual": 6
+      },
+      "inputs": [
+        "cola",
+        "ice"
+      ],
+      "thisCost": 1,
+      "note": "先做可乐再放冰；冰是基础材料，无需开关"
+    },
+    {
+      "id": "coffee",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "coffeeBean",
+        "water"
+      ],
+      "price": 6,
+      "thisCost": 3,
+      "chainCost": 3,
+      "net": 3
+    },
+    {
+      "id": "salad",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "lettuce",
+        "tomato"
+      ],
+      "price": 6,
+      "thisCost": 2,
+      "chainCost": 2,
+      "net": 4
+    },
+    {
+      "id": "pizzaBase",
+      "type": "intermediate",
+      "station": "food",
+      "inputs": [
+        "dough",
+        "ketchup"
+      ],
+      "price": null,
+      "thisCost": 3,
+      "chainCost": 3,
+      "net": 0,
+      "note": "中间产物，不可售卖（不可售 → 净利恒为 0）"
+    },
+    {
+      "id": "pizza",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "pizzaBase",
+        "cheese"
+      ],
+      "price": 12,
+      "thisCost": 2,
+      "chainCost": 5,
+      "net": 7,
+      "note": "本次仅扣芝士2（pizzaBase已沉没3）"
+    },
+    {
+      "id": "iceCream",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "milk",
+        "syrup"
+      ],
+      "price": 7,
+      "thisCost": 3,
+      "chainCost": 3,
+      "net": 4,
+      "note": "牛奶+糖浆直接打成冰淇淋，作为商品售卖"
+    },
+    {
+      "id": "milkshake",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "iceCream",
+        "milk"
+      ],
+      "price": 10,
+      "thisCost": 2,
+      "chainCost": 5,
+      "net": 5,
+      "note": "本次仅扣牛奶2（冰淇淋已沉没3：牛奶2+糖浆1）"
+    },
+    {
+      "id": "tea",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "teaBag",
+        "water"
+      ],
+      "price": 5,
+      "thisCost": 2,
+      "chainCost": 2,
+      "net": 3,
+      "note": "备料型商品：茶包+水即可出售"
+    },
+    {
+      "id": "icedTea",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "tea",
+        "ice"
+      ],
+      "price": 6,
+      "thisCost": 1,
+      "chainCost": 3,
+      "net": 3,
+      "note": "本次仅扣冰1（tea已沉没2）"
+    }
+  ],
+  "equivalenceClasses": [
+    {
+      "order": "cola",
+      "accepts": [
+        "cola",
+        "icedCola"
+      ],
+      "settlementByActual": true
+    },
+    {
+      "order": "icedCola",
+      "accepts": [
+        "icedCola"
+      ]
+    }
+  ],
+  "intermediates": [
+    "vegPatty",
+    "pizzaBase"
+  ],
+  "intermediateStepFactor": 0.65
+}

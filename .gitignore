@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+*.log
+
+# 凭据：绝不入库
+.git-token
+*.token
+*.pem
+*.key
+.env
+.env.*
+token.txt

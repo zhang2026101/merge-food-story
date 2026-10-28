@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>食合物语｜Merge Food Story</title>
+  <meta name="description" content="休闲经营 + 手操烹饪小游戏：双工位合成、拖拽递给顾客、随时升级设备。" />
+
+  <!-- PWA：manifest + iOS 全屏支持 -->
+  <link rel="manifest" href="./pwa/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="./pwa/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./pwa/icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="小灶" />
+  <meta name="theme-color" content="#2B2B2B" />
+
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <div id="stage"></div>
+
+  <!-- 竖屏提示：横版游戏，请把设备横过来 -->
+  <div id="rotate-hint" class="hidden">
+    <div class="ph"></div>
+    <b>请把手机横过来</b>
+    <span>《食合物语》是横屏游戏<br />旋转设备即可获得完整画面</span>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+  <script>
+    // 注册 Service Worker（离线 + 可安装）。必须通过 http(s) 或 localhost 打开才生效。
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () =>
+        navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('SW 注册失败', err))
+      );
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,940 @@
+{
+  "meta": {
+    "game": "食合物语 / Merge Food Story",
+    "based_on": "PRD-COOK-002 v1.1",
+    "status": "实现基线（authoritative）",
+    "design_principle": "顾客体验为上（流畅、清晰、低挫败、可成长）",
+    "logic_resolution": {
+      "w": 1120,
+      "h": 660
+    },
+    "priority_rule": "本配置与 owk_handoff_crafts.json 直接服从 PRD-COOK-002 v1.1；若冲突以 PRD 文首 priority_rule 裁决",
+    "resolutionNote": "横版布局：高度固定 660，宽度按视口宽高比 1120~1551 自适应（详见 owk_handoff_layout.json 的 fit 段）",
+    "dayLoop": {
+      "dayDurationMs": 90000,
+      "note": "顾客到店节奏由单日时长推导，倒计时归零即打烊；教学期不计时",
+      "drinkPool": [
+        "coffee",
+        "tea",
+        "iceCream",
+        "milkshake",
+        "icedTea"
+      ]
+    },
+    "economyNote": "体检后调整（v1.9）：房租 150/240/330（原 150/220/280，后期压力不足）；VIP 耐心 0.6→0.7（两份同种 + 25 秒过紧）；回收 30%→25%（减少囤货套利）。时间系统（90s/日、10s 间隔、42s 耐心、1200ms 单步）实测节奏舒适，保持不变。"
+  },
+  "economy": {
+    "startCoins": 65,
+    "daysPerWeek": 7,
+    "daysPerWeekNote": "每周营业天数（唯一权威）：引擎 nextDay() 的日上限读此值，代码里不再写死 7",
+    "rentByWeek": {
+      "1": 150,
+      "2": 240,
+      "3+": 330
+    },
+    "rentMulByDiff": {
+      "normal": 1,
+      "hard": 1
+    },
+    "recycleSellableRateNormal": 0.25,
+    "recycleIntermediateRateNormal": 0,
+    "bankrupt": {
+      "trigger": "coins < 0 after weekly rent",
+      "behavior": "softLand",
+      "retryOption": "重开本周",
+      "resetCoinsTo": "进入该周时的实际金币（上周周末结余 - 上周房租）",
+      "resetDevices": false,
+      "resetProgress": true
+    }
+  },
+  "ingredients": {
+    "bread": 1,
+    "patty": 2,
+    "potato": 1,
+    "syrup": 1,
+    "ice": 1,
+    "coffeeBean": 2,
+    "water": 1,
+    "dough": 2,
+    "ketchup": 1,
+    "cheese": 2,
+    "lettuce": 1,
+    "tomato": 1,
+    "milk": 2,
+    "teaBag": 1
+  },
+  "stations": {
+    "food": {
+      "inputSlots": 2,
+      "outputSlots": 1,
+      "parallel": true
+    },
+    "drink": {
+      "inputSlots": 2,
+      "outputSlots": 1,
+      "parallel": true
+    }
+  },
+  "matching": {
+    "mode": "unorderedSet",
+    "note": "两输入视为无序集合，投放顺序不影响匹配结果"
+  },
+  "crafting": {
+    "intermediateStepFactor": 0.65,
+    "earlyCloseDebounceMs": 500,
+    "earlyCloseDebounceNote": "全部顾客处理完后需持续该时长才提前打烊（防抖，避免最后一单刚结束就瞬间打烊）",
+    "note": "中间产物(菜肉饼/饼底/奶底/茶)读条 = 炉灶当前等级 stepTime × 0.65",
+    "failedProduct": {
+      "occupiesOutputSlot": true,
+      "sellable": false,
+      "refund": 0,
+      "recipeFailFeedback": "全食材键红闪 200ms"
+    },
+    "inputRecall": {
+      "enabled": true,
+      "scope": "判定前可单格取出退回，零惩罚；读条后不可撤"
+    },
+    "reuseFinishedDrink": {
+      "enabled": true,
+      "note": "已完成饮品可再投料（如可乐+冰=冰可乐），已沉没成本不重复扣"
+    }
+  },
+  "trash": {
+    "levels": [
+      {
+        "lv": 1,
+        "cooldownMs": 1500
+      },
+      {
+        "lv": 2,
+        "cooldownMs": 1000,
+        "upgradeCost": 40
+      },
+      {
+        "lv": 3,
+        "cooldownMs": 400,
+        "upgradeCost": 80
+      }
+    ],
+    "failedBypass": true,
+    "note": "丢弃失败品免冷却；自愿丢弃正常物品受冷却约束"
+  },
+  "devices": {
+    "stove": {
+      "levels": 4,
+      "upgradeCost": [
+        50,
+        100,
+        180
+      ],
+      "effect": "stepTime(合成读条 ms)",
+      "values": [
+        1200,
+        1020,
+        870,
+        740
+      ]
+    },
+    "counter": {
+      "levels": 4,
+      "upgradeCost": [
+        50,
+        100,
+        180
+      ],
+      "effect": "earned 倍率",
+      "note": "堂食与外卖共用此表（Lv1=100% / Lv2=110% / Lv3=120% / Lv4=130%）。外卖的「收银台加成」不得另立口径（见 deliveryEarn）",
+      "values": [
+        1,
+        1.1,
+        1.2,
+        1.3
+      ]
+    },
+    "sign": {
+      "levels": 4,
+      "upgradeCost": [
+        50,
+        100,
+        180
+      ],
+      "effect": "耐心倍率（叠加 difficulty.patienceMul）",
+      "values": [
+        1,
+        1.05,
+        1.1,
+        1.15
+      ]
+    },
+    "refund": {
+      "rate": 0.5,
+      "basis": "cumulative",
+      "note": "升级到新等级时，按该设备截至上一等级累计已投入升级费的 50% 返还；仅针对升级费，叶成本不返；Lv1→Lv2 返还 0（首级无返还）"
+    },
+    "upgradeFlow": {
+      "entry": "操作区右上角「升级」按钮",
+      "instant": true,
+      "require": "coins ≥ 升级费 且 未满级",
+      "example_stove": "Lv2→Lv3 扣100返25(累计50×0.5)净−75；Lv3→Lv4 扣180返75(累计150×0.5)净−105"
+    }
+  },
+  "storage": {
+    "capByDiff": {
+      "normal": 5,
+      "hard": 5
+    },
+    "note": "单一仓库 5 格：食材 / 半成品 / 成品都能放；已移除备料缓冲",
+    "weeklyClear": true,
+    "clearByDiff": {
+      "normal": {
+        "sellable": "recycle@25% of price",
+        "intermediate": "recycle@0"
+      },
+      "hard": {
+        "sellable": "discard",
+        "intermediate": "discard"
+      }
+    }
+  },
+  "difficulty": {
+    "normal": {
+      "burgerReq": "burger(面包+肉饼)",
+      "colaReq": "cola(不加冰，等价接受 icedCola)",
+      "colaIceChance": 0,
+      "patienceMul": 1,
+      "rentMul": 1,
+      "pace": {
+        "customersPerDay": 9,
+        "spawnIntervalMs": 24000,
+        "maxQueue": 3,
+        "dayDurationMs": 90000,
+        "minSpawnIntervalMs": 6000,
+        "note": "单日营业时长由 dayDurationMs 决定（倒计时即此值）；顾客到店间隔 = dayDurationMs / customersPerDay（不低于 minSpawnIntervalMs），spawnIntervalMs 仅作旧口径留档"
+      },
+      "recycleOnClear": true,
+      "leafDisplay": "当日菜单相关食材置灰其余",
+      "unlock": "默认开放"
+    },
+    "hard": {
+      "burgerReq": "signatureBurger(面包+菜肉饼，强制生菜层)",
+      "colaReq": "cola 与 icedCola 混合",
+      "colaIceChance": 0.5,
+      "patienceMul": 0.85,
+      "rentMul": 1,
+      "pace": {
+        "customersPerDay": 11,
+        "spawnIntervalMs": 18000,
+        "maxQueue": 4,
+        "dayDurationMs": 90000,
+        "minSpawnIntervalMs": 6000,
+        "note": "单日营业时长由 dayDurationMs 决定（倒计时即此值）；顾客到店间隔 = dayDurationMs / customersPerDay（不低于 minSpawnIntervalMs），spawnIntervalMs 仅作旧口径留档"
+      },
+      "recycleOnClear": false,
+      "leafDisplay": "当日菜单相关食材置灰其余",
+      "unlock": "需先通关普通第1周"
+    }
+  },
+  "customer": {
+    "vip": {
+      "chance": 0.15,
+      "priceMul": 1.8,
+      "patienceMul": 0.7,
+      "order": "两份同种食物"
+    },
+    "dismiss": {
+      "enabled": true,
+      "ui": "气泡角小按钮"
+    },
+    "bubble": {
+      "patienceBar": "气泡边框宽度=remainingMs/patienceMs；<20% 变危险色"
+    },
+    "enterFadeMs": 200,
+    "basePatienceMs": 42000,
+    "basePatienceNote": "PRD/配置未给出耐心基准值，此处补齐：实际耐心 = basePatienceMs × difficulty.patienceMul × signMul × VIP.patienceMul",
+    "pause": {
+      "enabled": true,
+      "scope": "冻结耐心/生成/读条；不影响经济与判定"
+    },
+    "tutorial": {
+      "enabled": true,
+      "trigger": "首次进入游戏第1周第1单",
+      "steps": [
+        "高亮食材键→合成→指向输出槽→提示拖给顾客",
+        "配方书自动展开并高亮汉堡/可乐"
+      ],
+      "skippable": true
+    }
+  },
+  "pricing": {
+    "formula": "earned = round((foodPrice + drinkPrice) × counterMul × (1 + tipFactor × remainingRatio))",
+    "tipFactor": 0.3,
+    "bigOrderItems": [
+      "pizza",
+      "milkshake",
+      "icedTea"
+    ],
+    "bigOrderNote": "「大单」判定白名单（ach_big_order_3）：新增高价菜品只需在此登记，不用改代码",
+    "remainingRatio": "第二件落手时剩余耐心 / 耐心上限 (0~1)",
+    "equivalenceClass": {
+      "cola": [
+        "cola",
+        "icedCola"
+      ],
+      "settlementByActual": true
+    },
+    "vipPriceMul": 1.8
+  },
+  "combo": {
+    "enabled": true,
+    "rule": "连续成交无流失/无失败品则累计；每单额外 +min(连击数,2) 币；流失或生成失败品时清零",
+    "cap": 2
+  },
+  "recipeBook": {
+    "enabled": true,
+    "collapsedByDefault": true,
+    "todayHighlight": true,
+    "content": "全部已知配方（含菜肉饼/冰可乐等衍生）"
+  },
+  "validation": {
+    "acceptanceCriteria": "AC-01 ~ AC-49（见 PRD §12）",
+    "milestones": "M1 视觉 / M2 制作 / M3 交易 / M4 升级与配方 / M5 回归",
+    "target": "简单模式第1周新手存活率 50~60%（M5 试玩标定）"
+  },
+  "catCoins": {
+    "currency": "catCoin",
+    "perDay": 10,
+    "hardMul": 2,
+    "note": "猫猫币：每日/每周固定发放；周结算额外奖励按「每满 25 金币额外奖励 1 猫猫币」计算，不消耗金币。",
+    "exchangeRate": 25,
+    "weeklyExchangeCap": 100,
+    "exchangeNote": "周结算时 25 金币 = 1 猫猫币，单周最多换 100 猫猫币（2500 金币）；金币不足则只能换到余额允许的数量，余额与额度实时回写。",
+    "perWeek": 30
+  },
+  "catSkins": {
+    "defaultSkin": "orange",
+    "price": 100,
+    "skins": [
+      {
+        "id": "orange",
+        "nameKey": "skin.orange",
+        "price": 0,
+        "descKey": "skin.orange.desc",
+        "theme": {
+          "bg": "#FDF6E9",
+          "paper2": "#F7EEDA",
+          "gold": "#F5C445",
+          "line": "#E6DCC8",
+          "ink2": "#6B6055",
+          "deco": "",
+          "keycapTop": "#FFF8EC",
+          "keycapSide": "#E8DCC8",
+          "keycapText": "#6B6055",
+          "keycapGloss": "rgba(255,255,255,.5)"
+        },
+        "themeName": "暖橘小店"
+      },
+      {
+        "id": "cow",
+        "nameKey": "skin.cow",
+        "price": 100,
+        "descKey": "skin.cow.desc",
+        "theme": {
+          "bg": "#F3F3F1",
+          "paper2": "#E9E9E5",
+          "gold": "#C9C4BC",
+          "line": "#D8D4CB",
+          "ink2": "#5C5A55",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='9' cy='9' r='2.4' fill='%23444' opacity='0.10'/%3E%3Ccircle cx='24' cy='23' r='1.8' fill='%23FFF' opacity='0.6'/%3E%3C/svg%3E\")",
+          "keycapTop": "#FFFFFF",
+          "keycapSide": "#D8D4CB",
+          "keycapText": "#4A4844",
+          "keycapGloss": "rgba(255,255,255,.6)"
+        },
+        "themeName": "黑白奶牛小店"
+      },
+      {
+        "id": "xiaoguai",
+        "nameKey": "skin.xiaoguai",
+        "price": 100,
+        "descKey": "skin.xiaoguai.desc",
+        "theme": {
+          "bg": "#F1F4F8",
+          "paper2": "#E6ECF3",
+          "gold": "#8FA6BF",
+          "line": "#D3DDE8",
+          "ink2": "#4E5A68",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='8' cy='10' r='2.6' fill='%238FA6BF' opacity='0.16'/%3E%3Ccircle cx='23' cy='24' r='1.6' fill='%238FA6BF' opacity='0.12'/%3E%3C/svg%3E\")",
+          "keycapTop": "#F5F8FB",
+          "keycapSide": "#C6D5E3",
+          "keycapText": "#4E5A68",
+          "keycapGloss": "rgba(255,255,255,.55)"
+        },
+        "themeName": "灰蓝斑小店"
+      },
+      {
+        "id": "black",
+        "nameKey": "skin.black",
+        "price": 100,
+        "descKey": "skin.black.desc",
+        "theme": {
+          "bg": "#2B2D42",
+          "paper2": "#212338",
+          "gold": "#E8C872",
+          "line": "#4A4D66",
+          "ink2": "#B9BCD0",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='8' cy='8' r='1.5' fill='%23E8C872' opacity='0.22'/%3E%3Ccircle cx='24' cy='20' r='1.2' fill='%23E8C872' opacity='0.16'/%3E%3C/svg%3E\")",
+          "keycapTop": "#2B2D42",
+          "keycapSide": "#1B1D2E",
+          "keycapText": "#E8C872",
+          "keycapGloss": "rgba(232,200,114,.25)"
+        },
+        "themeName": "深夜黑猫小店"
+      },
+      {
+        "id": "calico",
+        "nameKey": "skin.calico",
+        "price": 100,
+        "descKey": "skin.calico.desc",
+        "theme": {
+          "bg": "#FDF1E4",
+          "paper2": "#F6E3CE",
+          "gold": "#E8973E",
+          "line": "#EBD3B6",
+          "ink2": "#7A5B3C",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='8' cy='9' r='2.8' fill='%23E8973E' opacity='0.16'/%3E%3Ccircle cx='24' cy='22' r='2' fill='%233B2B2B' opacity='0.09'/%3E%3C/svg%3E\")",
+          "keycapTop": "#FFF6EA",
+          "keycapSide": "#E4C9A6",
+          "keycapText": "#7A5B3C",
+          "keycapGloss": "rgba(255,255,255,.55)"
+        },
+        "themeName": "橘白三花小店"
+      },
+      {
+        "id": "blue",
+        "nameKey": "skin.blue",
+        "price": 100,
+        "descKey": "skin.blue.desc",
+        "theme": {
+          "bg": "#EAF5FB",
+          "paper2": "#D9EBF5",
+          "gold": "#8FA3B8",
+          "line": "#C4DBE9",
+          "ink2": "#46586A",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Cpath d='M0 16c6 5 12-5 18 0s12-5 18 0' stroke='%238FA3B8' stroke-width='2' fill='none' opacity='0.14'/%3E%3C/svg%3E\")",
+          "keycapTop": "#EAF6FC",
+          "keycapSide": "#B4D6E8",
+          "keycapText": "#46586A",
+          "keycapGloss": "rgba(255,255,255,.55)"
+        },
+        "themeName": "海蓝小店"
+      },
+      {
+        "id": "siamese",
+        "nameKey": "skin.siamese",
+        "price": 150,
+        "descKey": "skin.siamese.desc",
+        "theme": {
+          "bg": "#FBF5E9",
+          "paper2": "#F2E7D2",
+          "gold": "#C9A87C",
+          "line": "#E2D2B8",
+          "ink2": "#6B5A44",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='9' cy='9' r='2.2' fill='%236B4A32' opacity='0.10'/%3E%3Ccircle cx='24' cy='23' r='1.4' fill='%236B4A32' opacity='0.08'/%3E%3C/svg%3E\")",
+          "keycapTop": "#FDF7EC",
+          "keycapSide": "#DFC9A6",
+          "keycapText": "#6B5A44",
+          "keycapGloss": "rgba(255,255,255,.6)"
+        },
+        "themeName": "奶油暹罗小店"
+      },
+      {
+        "id": "lucky",
+        "nameKey": "skin.lucky",
+        "price": 200,
+        "descKey": "skin.lucky.desc",
+        "theme": {
+          "bg": "#FFF3E4",
+          "paper2": "#F8E2CB",
+          "gold": "#D4A017",
+          "line": "#EBCFA0",
+          "ink2": "#8A3B22",
+          "deco": "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34'%3E%3Ccircle cx='8' cy='8' r='1.8' fill='%23D4A017' opacity='0.20'/%3E%3Ccircle cx='24' cy='22' r='1.5' fill='%23C3423F' opacity='0.14'/%3E%3C/svg%3E\")",
+          "keycapTop": "#FFF6E9",
+          "keycapSide": "#E7C48F",
+          "keycapText": "#8A3B22",
+          "keycapGloss": "rgba(255,255,255,.55)"
+        },
+        "themeName": "朱红金铃小店"
+      }
+    ],
+    "note": "皮肤 = 小猫 + 一整套小店视觉（背景/面板/按钮/字体/纹理/键帽），购买皮肤即解锁该主题；商店为唯一入口。",
+    "defaultThemeSkin": "orange"
+  },
+  "weather": {
+    "enabled": true,
+    "note": "天气按周排布（同一种子结果固定）。影响四个旋钮：当日顾客数、饮品冷热偏好、饮品售价、订单商品权重（orderWeights，可按天气逐项扩展）。不动耐心/制作耗时，避免难度失控。",
+    "types": {
+      "sunny": {
+        "nameKey": "weather.sunny",
+        "spawnMul": 1,
+        "cold": 2,
+        "hot": 1,
+        "drinkPriceMul": 1.02,
+        "tone": "warm",
+        "descKey": "weather.sunny.desc",
+        "orderWeights": {
+          "cold": 1.1
+        }
+      },
+      "cloudy": {
+        "nameKey": "weather.cloudy",
+        "spawnMul": 1,
+        "cold": 1,
+        "hot": 1,
+        "drinkPriceMul": 1,
+        "tone": "neutral",
+        "descKey": "weather.cloudy.desc",
+        "orderWeights": {}
+      },
+      "rain": {
+        "nameKey": "weather.rain",
+        "spawnMul": 1.25,
+        "cold": 1,
+        "hot": 2,
+        "drinkPriceMul": 1,
+        "tone": "cool",
+        "descKey": "weather.rain.desc",
+        "orderWeights": {
+          "hot": 1.15
+        }
+      },
+      "snow": {
+        "nameKey": "weather.snow",
+        "spawnMul": 1.5,
+        "cold": 1,
+        "hot": 3,
+        "drinkPriceMul": 1.03,
+        "tone": "cold",
+        "descKey": "weather.snow.desc",
+        "orderWeights": {
+          "hot": 1.2,
+          "cold": 0.9
+        }
+      },
+      "fog": {
+        "nameKey": "weather.fog",
+        "spawnMul": 1.15,
+        "cold": 1,
+        "hot": 1.5,
+        "drinkPriceMul": 1.01,
+        "tone": "dim",
+        "descKey": "weather.fog.desc",
+        "orderWeights": {
+          "hot": 1.1
+        }
+      },
+      "heat": {
+        "nameKey": "weather.heat",
+        "spawnMul": 0.92,
+        "cold": 3,
+        "hot": 1,
+        "drinkPriceMul": 1.04,
+        "tone": "hot",
+        "descKey": "weather.heat.desc",
+        "orderWeights": {
+          "cold": 1.2
+        }
+      },
+      "sand": {
+        "nameKey": "weather.sand",
+        "spawnMul": 1.35,
+        "cold": 1,
+        "hot": 2,
+        "drinkPriceMul": 1.02,
+        "tone": "dim",
+        "descKey": "weather.sand.desc",
+        "orderWeights": {
+          "hot": 1.15
+        }
+      }
+    },
+    "schedule": {
+      "firstDayOfWeek": "sunny",
+      "lastDaySafePool": [
+        "sunny",
+        "cloudy",
+        "heat"
+      ],
+      "harsh": [
+        "rain",
+        "snow",
+        "fog",
+        "sand"
+      ],
+      "maxHarshPerWeek": 2,
+      "note": "每周第 1 天固定晴（新手友好），第 7 天（交租日）只从安全池抽；中间 5 天最多 2 天恶劣天气。"
+    },
+    "coldDrinks": [
+      "cola",
+      "icedCola",
+      "icedTea",
+      "iceCream",
+      "milkshake"
+    ],
+    "hotDrinks": [
+      "coffee",
+      "tea"
+    ],
+    "orderWeights": {}
+  },
+  "delivery": {
+    "version": 1,
+    "enabled": true,
+    "note": "可选增益订单：手机提前 10 秒预警所需物品 → 倒计时结束骑手到店 → 玩家交付后骑手离店配送 → 10 秒后送达并按正常订单的双倍结算金币；日结时未完成订单并入当天总结算（已交付的按送达口径结算）。",
+    "previewMs": 10000,
+    "incomePercent": 150,
+    "catCoinPerOrder": 1,
+    "catCoinDayCap": 2,
+    "rainRiderWaitBonusMs": 2000,
+    "tipMaxPercent": 30,
+    "modes": {
+      "normal": {
+        "unlockRunDay": 3,
+        "riderWaitMs": 10000,
+        "phoneAtMs": [
+          35000
+        ],
+        "rainPhoneAtMs": [
+          30000,
+          70000
+        ]
+      },
+      "hard": {
+        "unlockRunDay": 1,
+        "riderWaitMs": 8000,
+        "phoneAtMs": [
+          28000
+        ],
+        "rainPhoneAtMs": [
+          26000,
+          66000
+        ]
+      }
+    },
+    "deliverySettleMs": 10000,
+    "deliveredMul": 2
+  },
+  "achievements": {
+    "storageKey": "owk.ach.v1",
+    "note": "34 个一次性成就，结算时批量检查；奖励猫猫币，自动发放并 toast。全部成就直接可见（不做隐藏），按 difficulty 难度分级调整奖励数值。",
+    "list": [
+      {
+        "id": "ach_first_day",
+        "group": "survival",
+        "reward": 5,
+        "when": "day",
+        "cond": "daySurvived",
+        "difficulty": "easy"
+      },
+      {
+        "id": "ach_pay_rent",
+        "group": "survival",
+        "reward": 20,
+        "when": "week",
+        "cond": "paidRent",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_day5",
+        "group": "survival",
+        "reward": 10,
+        "when": "day",
+        "cond": "day5",
+        "difficulty": "easy"
+      },
+      {
+        "id": "ach_week3",
+        "group": "survival",
+        "reward": 30,
+        "when": "week",
+        "cond": "weeks3",
+        "difficulty": "hard"
+      },
+      {
+        "id": "ach_week5",
+        "group": "survival",
+        "reward": 55,
+        "when": "week",
+        "cond": "weeks5",
+        "difficulty": "epic"
+      },
+      {
+        "id": "ach_hard_week1",
+        "group": "survival",
+        "reward": 38,
+        "when": "week",
+        "cond": "hardPaidRent",
+        "difficulty": "hard"
+      },
+      {
+        "id": "ach_first_serve",
+        "group": "biz",
+        "reward": 5,
+        "when": "day",
+        "cond": "firstServe",
+        "difficulty": "easy"
+      },
+      {
+        "id": "ach_day_100",
+        "group": "biz",
+        "reward": 18,
+        "when": "day",
+        "cond": "dayEarned100",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_orders_100",
+        "group": "biz",
+        "reward": 24,
+        "when": "day",
+        "cond": "totalOrders100",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_revenue_2000",
+        "group": "biz",
+        "reward": 34,
+        "when": "day",
+        "cond": "totalRevenue2000",
+        "difficulty": "hard"
+      },
+      {
+        "id": "ach_rent_rich",
+        "group": "biz",
+        "reward": 15,
+        "when": "week",
+        "cond": "rentRich",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_vip_10",
+        "group": "biz",
+        "reward": 18,
+        "when": "day",
+        "cond": "vip10",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_zero_waste_day",
+        "group": "skill",
+        "reward": 18,
+        "when": "day",
+        "cond": "zeroWasteDay",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_zero_waste_week",
+        "group": "skill",
+        "reward": 35,
+        "when": "week",
+        "cond": "zeroWasteWeek",
+        "difficulty": "hard"
+      },
+      {
+        "id": "ach_double_pot",
+        "group": "skill",
+        "reward": 15,
+        "when": "day",
+        "cond": "doublePot10s",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_speed_3",
+        "group": "skill",
+        "reward": 20,
+        "when": "day",
+        "cond": "speed3",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_storage_4",
+        "group": "skill",
+        "reward": 16,
+        "when": "day",
+        "cond": "storage4",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_no_trash_week",
+        "group": "skill",
+        "reward": 20,
+        "when": "week",
+        "cond": "noTrashWeek",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_big_order_3",
+        "group": "skill",
+        "reward": 22,
+        "when": "day",
+        "cond": "bigOrder3",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_rain_pro",
+        "group": "challenge",
+        "reward": 20,
+        "when": "day",
+        "cond": "rainDay120",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_rush_calm",
+        "group": "challenge",
+        "reward": 24,
+        "when": "day",
+        "cond": "heatDayLost1",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_picky_pro",
+        "group": "challenge",
+        "reward": 24,
+        "when": "day",
+        "cond": "fogDay8Orders",
+        "difficulty": "normal"
+      },
+      {
+        "id": "ach_cat_3",
+        "group": "collect",
+        "reward": 32,
+        "when": "day",
+        "cond": "own3Skins",
+        "difficulty": "hard"
+      },
+      {
+        "id": "ach_theme_1",
+        "group": "collect",
+        "reward": 8,
+        "when": "day",
+        "cond": "own1Theme",
+        "difficulty": "easy"
+      },
+      {
+        "id": "ach_delivery_first",
+        "group": "biz",
+        "difficulty": "easy",
+        "reward": 5,
+        "when": "day",
+        "cond": "deliveryFirst"
+      },
+      {
+        "id": "ach_delivery_10",
+        "group": "biz",
+        "difficulty": "normal",
+        "reward": 20,
+        "when": "day",
+        "cond": "totalDeliveries10"
+      },
+      {
+        "id": "ach_cross_day",
+        "group": "challenge",
+        "difficulty": "hard",
+        "reward": 35,
+        "when": "day",
+        "cond": "crossDayDelivery"
+      },
+      {
+        "id": "ach_weather_variety",
+        "group": "challenge",
+        "difficulty": "normal",
+        "reward": 20,
+        "when": "week",
+        "cond": "weatherVariety3"
+      },
+      {
+        "id": "ach_day_orders_12",
+        "group": "biz",
+        "difficulty": "hard",
+        "reward": 32,
+        "when": "day",
+        "cond": "dayOrders12"
+      },
+      {
+        "id": "ach_rich_500",
+        "group": "biz",
+        "difficulty": "normal",
+        "reward": 20,
+        "when": "day",
+        "cond": "coins500"
+      },
+      {
+        "id": "ach_revenue_5000",
+        "group": "biz",
+        "difficulty": "hard",
+        "reward": 38,
+        "when": "day",
+        "cond": "totalRevenue5000"
+      },
+      {
+        "id": "ach_cat_30",
+        "group": "collect",
+        "difficulty": "epic",
+        "reward": 50,
+        "when": "day",
+        "cond": "catCoins30"
+      },
+      {
+        "id": "ach_heat_8",
+        "group": "challenge",
+        "difficulty": "normal",
+        "reward": 22,
+        "when": "day",
+        "cond": "heatDay8Orders"
+      },
+      {
+        "id": "ach_snow_150",
+        "group": "challenge",
+        "difficulty": "hard",
+        "reward": 34,
+        "when": "day",
+        "cond": "snowDay150"
+      }
+    ],
+    "tiers": {
+      "easy": {
+        "labelKey": "ach.tier.easy",
+        "minReward": 5,
+        "maxReward": 10
+      },
+      "normal": {
+        "labelKey": "ach.tier.normal",
+        "minReward": 15,
+        "maxReward": 25
+      },
+      "hard": {
+        "labelKey": "ach.tier.hard",
+        "minReward": 30,
+        "maxReward": 40
+      },
+      "epic": {
+        "labelKey": "ach.tier.epic",
+        "minReward": 50,
+        "maxReward": 60
+      }
+    }
+  },
+  "themes": {
+    "removed": true,
+    "note": "主题已并入 catSkins.skins[].theme，商店为唯一入口",
+    "legacy": [
+      "default",
+      "midnight",
+      "sakura",
+      "seaside",
+      "foodcourt",
+      "space",
+      "snow"
+    ]
+  }
+}

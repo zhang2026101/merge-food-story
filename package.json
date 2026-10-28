@@ -1,0 +1,17 @@
+{
+  "name": "merge-food-story",
+  "version": "2.13.0",
+  "private": true,
+  "description": "食合物语 / Merge Food Story —— 休闲经营 + 手操烹饪网页游戏（PWA）",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "test": "node tools/test-engine.mjs && node tools/verify-fixes.mjs",
+    "test:engine": "node tools/test-engine.mjs",
+    "test:fixes": "node tools/verify-fixes.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
