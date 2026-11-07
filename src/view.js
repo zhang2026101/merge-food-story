@@ -4,8 +4,13 @@ import { icon, customerSVG, catSVG, riderSVG } from './art.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-// v2.9：小猫气泡的内置冷却（毫秒）。防止玩家连点刷屏。
-const CAT_BUBBLE_CD_MS = 5000;
+// 小猫气泡的**文字换句 CD**（毫秒）。它不是「交互冷却」——
+// 点猫永远有反馈（爱心 / 挤压动画 / 猫叫），只是在 CD 内不换词、不重新弹出，
+// 避免连点把气泡刷成文字跑马灯。
+const CAT_BUBBLE_CD_MS = 1000;
+
+// v2.19：食材键的「双击」不再靠时间窗口判定 —— 只要该食材已是选中态，再点一次就投到专属台。
+// 旧版用 320ms 窗口，真人手速常超过它，表现成「双击有时候没反应」（见 PROGRESS §41）。
 
 export class View {
   constructor(ctx, game, stage) {
@@ -15,6 +20,9 @@ export class View {
     this.t = ctx.t;
     this.custEls = new Map();
     this.selected = null;
+    // v2.18：点击链路选中的「叶食材」。它与 this.selected（成品/半成品的格子位置）
+    // 互斥：一次只能有一件东西处于「选中待放置」状态，否则点顾客时不知道要交什么。
+    this.selectedIng = null;
     this.modalActions = null;
     this.drag = null;
     this.lastIngClick = 0;
@@ -25,13 +33,16 @@ export class View {
     this.catStore = { coins: 0, owned: ['orange'], skin: 'orange' };
     this.catSkinApplied = '';
     this.lastPet = 0;
-    // v2.9.1：气泡冷却时间戳 / 文案轮换游标 / 上次说的话
-    // lastSay 用 -Infinity 表示「从未说过」——初值 0 会让开局前 5 秒都判为冷却中，
-    // 玩家第一次点猫就会看到「让我歇一小会儿」，看起来像功能坏了。
+    // v2.9.1：气泡换句 CD 时间戳 / 文案轮换游标 / 上次说的话
+    // lastSay 用 -Infinity 表示「从未说过」——初值 0 会让开局前 1 秒都判为换句 CD 中，
+    // 玩家第一次点猫就看不到文案，看起来像功能坏了。
     this.lastSay = -Infinity;
     this.sayCursor = 0;
     this.lastCatLine = '';
     this.bubbleTimer = null;
+    // v2.18：拖拽判定阈值（逻辑像素）。触屏手指抖动大，放宽到 14；鼠标仍是 8。
+    // 只影响「按下后移动多少才算拖拽」，不改任何视觉。
+    this.dragSlop = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 14 : 8;
   }
 
   // ============================================================ mount
@@ -55,6 +66,7 @@ export class View {
             <div class="combo-pill" id="hud-combo"></div>
           </div>
           <div class="hud-right">
+            <div class="rent-pill" id="hud-rent-pill" title="${this.t('hud.rentTip')}">${icon('rent')}<span class="rent-lb">${this.t('hud.rentLabel')}</span><b id="hud-rent">0</b></div>
             <button class="act" data-act="recipe">${icon('book')}<span>${this.t('recipe.toggle')}</span></button>
             <button class="act" data-act="upgrade">${icon('up')}<span>${this.t('upgrade.title')}</span></button>
             <button class="act" data-act="pause">${icon('pause')}<span>${this.t('pause.title')}</span></button>
@@ -81,7 +93,11 @@ export class View {
               <span id="tut-text"></span>
               <button class="link" data-act="skip-tut">${this.t('tutorial.skip')}</button>
             </div>
-            <div class="cust-row" id="cust-row"></div>
+            <div class="cust-row" id="cust-row">
+              <!-- v2.19：骑手改成「人物 + 气泡」的顾客形态，排在队列最右端（order:9999）。
+                   它仍在 #cust-row 里，但不在 s.customers 里 —— 纯展示，不影响排队/耐心逻辑。 -->
+              <div class="rider hidden" id="rider" data-drop="delivery" data-act="rider" title="${this.t('delivery.hand')}"></div>
+            </div>
             <div class="cat" id="cat" data-act="pet-cat" title="${this.t('cat.hint')}">
               <span class="cat-heart" id="cat-heart"></span>
               <span class="cat-svg" id="cat-svg"></span>
@@ -91,20 +107,36 @@ export class View {
                  会自建层叠上下文，导致气泡被同级 .cust-row(z-index:1) 整个盖住 ——
                  现象是「有内容、有 class、有尺寸，却看不见」。 -->
             <div class="cat-bubble" id="cat-bubble"></div>
-            <div class="rider hidden" id="rider" data-drop="delivery" data-act="rider" title="${this.t('delivery.hand')}"></div>
           </section>
           <section class="op" id="operation">
-            <div class="stations" id="stations"></div>
-            <div class="shelf" id="shelf">
-              <div class="store">
+            <!-- v2.18：三个合成台（食物台 → 甜品台 → 通用台）全部竖排在操作列里。
+                 高度由 .stations 的 flex:1 1 0 + gap 均分，所以三台永远等高，
+                 宽度吃满操作列，左边缘也一致 —— 不再写死每台高度，窗口高度变了仍然等高。
+                 #universal 是模板里预留的第三格，由 buildUniversal() 填充。 -->
+            <div class="stations" id="stations">
+              <div class="uni-wrap" id="universal"></div>
+            </div>
+          </section>
+          <!-- v2.18：仓储行只占左列并铺满到操作列左边缘（grid-column: 1），
+               行内顺序：仓库（flex:1 吃掉剩余宽度）→ 一键提交 → 垃圾桶贴最右端。
+               操作列已跨两行（grid-row: 1 / span 2），所以第二行只剩这一行，右侧不再留白。 -->
+          <section class="shelf" id="shelf">
+            <!-- v2.19：整张仓库卡都是投放区（data-drop 挂在 .store 上，不再只认 5 个格位），
+                 拖到「仓库 / 1/5」那行文字或卡片空白处也能入仓。卡片外框已按用户要求去掉。 -->
+            <div class="store" data-drop="storage">
+              <div class="store-main">
                 <div class="row-head"><span>${this.t('storage.title')}</span><em id="storage-count"></em></div>
                 <div class="slots" id="storage-slots" data-drop="storage"></div>
               </div>
-              <div class="trash" id="trash" data-drop="trash">
-                <span class="trash-ic" id="trash-ic">${icon('trash')}</span>
-                <span class="trash-lv" id="trash-lv"></span>
-                <span class="trash-tip" id="trash-tip"></span>
-              </div>
+              <button class="submit-btn" id="submit-btn" data-act="submit" title="${this.t('storage.submitTitle')}">
+                <span class="submit-ic">${icon('check')}</span>
+                <b>${this.t('storage.submit')}</b>
+              </button>
+            </div>
+            <div class="trash" id="trash" data-drop="trash">
+              <span class="trash-ic" id="trash-ic">${icon('trash')}</span>
+              <span class="trash-lv" id="trash-lv"></span>
+              <span class="trash-tip" id="trash-tip"></span>
             </div>
           </section>
         </main>
@@ -127,6 +159,7 @@ export class View {
       day: $('#hud-day'),
       mode: $('#hud-mode'),
       combo: $('#hud-combo'),
+      rent: $('#hud-rent'),
       timer: $('#day-timer'),
       timerTime: $('#dt-time'),
       timerFill: $('#dt-fill'),
@@ -142,6 +175,8 @@ export class View {
       storage: $('#storage-slots'),
       storageCount: $('#storage-count'),
       shelf: $('#shelf'),
+      universal: $('#universal'),
+      submitBtn: $('#submit-btn'),
       wxBoard: $('#wx-board'),
       wxIc: $('#wx-ic'),
       wxName: $('#wx-name'),
@@ -182,6 +217,13 @@ export class View {
     px('--pad', sz.pad);
     px('--slot', sz.stationSlot);
     px('--store-slot', sz.storeSlot);
+    // v2.18：三个合成台的格位统一走 --slot（layout.json 的 sizing.stationSlot）。
+    // --uni-slot 保留成同值别名：老样式与断言（V217-view-uni-slot）还在用这个名字，
+    // 而 sizing.universalSlot 已下线，取不到就回落到 stationSlot。
+    px('--uni-slot', sz.universalSlot != null ? sz.universalSlot : sz.stationSlot);
+    px('--submit-w', sz.submitW);
+    // v2.18：垃圾桶宽度进令牌（sizing.trashW）。取不到就回落到 110，避免老 layout.json 下 CSS 变量为空。
+    px('--trash-w', sz.trashW != null ? sz.trashW : 110);
     const cols = sz.ingCols || 8;
     if (this.el.ings) this.el.ings.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 168px))`;
     const h = (L.fit && L.fit.height) || 660;
@@ -189,8 +231,10 @@ export class View {
   }
 
   buildStations() {
+    // data-panel-station 是「工位面板」的统一钩子：食物台/甜品台/通用台都用它定位，
+    // 这样 renderStations() / frame() 只写一段循环就能同时驱动三种工位。
     const make = (key, name) => `
-      <div class="station" data-station="${key}" data-drop="station" data-act-station="${key}">
+      <div class="station" data-station="${key}" data-panel-station="${key}" data-drop="station" data-act-station="${key}">
         <div class="st-head">
           <span class="st-name">${name}</span>
           <span class="st-lv" data-lv="${key}">Lv1</span>
@@ -204,9 +248,45 @@ export class View {
         </div>
         <div class="st-bar"><i data-bar-station="${key}"></i></div>
       </div>`;
-    this.el.stations.innerHTML =
-      make('food', this.t('station.food')) +
-      make('drink', this.t('station.drink'));
+    // v2.18：#universal 现在就住在 #stations 里（模板预留的第三格），
+    // 所以只能用 insertAdjacentHTML 往前面插两台专业台 —— innerHTML 会把它一并清空。
+    this.el.stations.insertAdjacentHTML(
+      'afterbegin',
+      make('food', this.t('station.food')) + make('drink', this.t('station.drink'))
+    );
+    this.buildUniversal();
+  }
+
+  /**
+   * 通用合成台（v2.18）：与食物台 / 甜品台完全同构 ——
+   * 标题行（名称 + 说明 + 等级）/ 格位行（2 输入 + 箭头 + 1 输出）/ 进度条。
+   * 三个台子都在 .stations 里按 flex 均分高度，格位统一走 --slot，所以三台看起来是同一家族。
+   *
+   * 仍然保留 .uni 这个修饰类，有两个现成用途：
+   *   1) renderStations() 靠它判断「输出格只放省略号」——54px 的格子里塞不下「咕嘟咕嘟…」；
+   *   2) 左侧色条换成绿色，与食物台（金）/ 甜品台（蓝）区分。
+   * 内部结构走 .st-head / .st-body / .st-bar / .slot 这套公共类，
+   * 因此 renderStations() / frame() 的同一段循环就能驱动三种工位，不需要额外分支。
+   */
+  buildUniversal() {
+    if (!this.el.universal) return;
+    const key = 'universal';
+    this.el.universal.innerHTML = `
+      <div class="station uni" data-station="${key}" data-panel-station="${key}" data-drop="station" data-act-station="${key}">
+        <div class="st-head">
+          <span class="st-name uni-name">${this.t('station.universal')}</span>
+          <i class="st-note">${this.t('station.universalNote')}</i>
+          <span class="st-lv" data-lv="${key}">Lv1</span>
+        </div>
+        <div class="st-body">
+          <div class="slot in" data-drop="input" data-station="${key}" data-index="0" data-slot="in0"></div>
+          <div class="slot-plus">+</div>
+          <div class="slot in" data-drop="input" data-station="${key}" data-index="1" data-slot="in1"></div>
+          <div class="slot-arrow">→</div>
+          <div class="slot out" data-drop="output" data-slot="out" data-station="${key}"></div>
+        </div>
+        <div class="st-bar"><i data-bar-station="${key}"></i></div>
+      </div>`;
   }
 
   buildIngredients() {
@@ -250,6 +330,19 @@ export class View {
 
     // 面板内部（含面板背景）的点击到此为止：面板自己绑定了按钮，剩下的是空白区
     if (e.target.closest('.panel')) return;
+
+    // v2.18：选中食材之后，点合成台 / 它的输入格 / 输出格 = 投放。
+    // 三个台一视同仁（通用台也能点），归属校验交给引擎的 addIngredient。
+    if (this.selectedIng) {
+      const hit = e.target.closest('[data-drop="station"], [data-drop="input"], [data-drop="output"]');
+      if (hit && hit.dataset.station) {
+        const zone = hit.dataset.drop;
+        const idx = zone === 'input' ? Number(hit.dataset.index) : undefined;
+        this.placeSelectedIng(hit.dataset.station, idx);
+        return;
+      }
+    }
+
     // 点击面板外区域顺手收起抽屉
     if (!this.el.recipe.classList.contains('hidden')) this.closeRecipe();
     if (!this.el.upgrade.classList.contains('hidden')) this.closeUpgrade();
@@ -295,6 +388,9 @@ export class View {
     }
     const st = e.target.closest('[data-act-station]');
     if (st && !e.target.closest('[data-item]')) this.game.setStation(st.dataset.actStation);
+    // 点到空白处 = 取消食材选中：选中态必须有明确的退出方式，
+    // 否则误选之后玩家只能靠「再点一次同一个食材」才解得掉。
+    if (this.selectedIng) { this.clearIngSelection(); this.render(); }
   }
 
   /** 音效（表现层） */
@@ -305,18 +401,85 @@ export class View {
 
   clickIngredient(key) {
     const now = performance.now();
-    // 80ms 去抖：仅拦截「同一食材键」的连点，避免误触双投
-    if (key === this.lastIngKey && now - this.lastIngClick < 80) return;
+    const gap = now - this.lastIngClick;
+    const sameKey = key === this.lastIngKey;
+    // 80ms 去抖：仅拦截「同一食材键」的极短连击（防一次物理点击补发两次 click）
+    if (sameKey && gap < 80) return;
     this.lastIngKey = key;
     this.lastIngClick = now;
     // 食材键在视觉上是键帽（--keycap-*），按下先给 keycap 手感音，再由 ok/wrong 区分结果
     this.sfx('keycap');
-    const r = this.game.addIngredient(key);
-    if (!r.ok) { this.fail(r.reason); this.sfx('ingredient_wrong'); }
-    else this.sfx('ingredient_ok');
+
+    // v2.19：**只要这件食材已经是选中态，再点它就投到专属台**，不再看时间窗口。
+    // 旧版用 320ms 的「双击窗口」判定，超过窗口就走到「取消选中」——
+    // 真人手速普遍 300ms 以上，于是表现成「双击有时候没反应」（实测 300/600/900ms 全都不落台）。
+    // 现在取消选中只走两条路：点空白处、或点别的食材。
+    if (this.selectedIng === key) {
+      const home = this.game.stationOfIngredient(key);
+      if (home) {
+        this.placeSelectedIng(home);
+        return;
+      }
+      // 理论上所有叶食材都能在配方表里找到归属；真找不到就给一句提示，别让点击变成「没反应」
+      this.toast(this.t('toast.noQuickStation'));
+      return;
+    }
+
+    // 没选中（或选的是别的食材）→ 选中它
+    // 与成品选中互斥：留着旧的 this.selected，玩家点顾客时会把成品交出去
+    this.clearSelection();
+    this.selectedIng = key;
+    // v2.18：配方书 / 升级面板是**浮在合成台上方**的（教学开局会自动展开配方书）。
+    // 选中食材后下一步必然要点台子，面板不收起就会把这一击整个挡掉
+    // （实测：Playwright 点 .st-name 直接 TimeoutError，真人则是「点了没反应」）。
+    // 旧链路是在「投料成功后」才收面板，现在提前到「选中时」，因为落台是独立的一步。
+    if (!this.el.recipe.classList.contains('hidden')) this.closeRecipe();
+    if (!this.el.upgrade.classList.contains('hidden')) this.closeUpgrade();
+    this.render();
+  }
+
+  /**
+   * 把当前选中的叶食材放进指定工位（点击链路的落地点）
+   *
+   * 与拖拽走的是同一个引擎入口 `addIngredient(key, station, index)`，
+   * 所以「金币不够 / 台子正忙 / 输出槽占着 / 归属不对 / 通用台不做半成品」
+   * 这些守卫与拖拽完全同源，不会出现两条路径规则漂移。
+   *
+   * @returns {boolean} 是否消费了这次点击（false = 当时没有选中食材，交给后面的分支）
+   */
+  placeSelectedIng(stationKey, index) {
+    const key = this.selectedIng;
+    if (!key || !stationKey) return false;
+    const r = this.game.addIngredient(key, stationKey, index);
+    if (!r.ok) {
+      // 失败时保留选中态：玩家点错台子（如生菜点了甜品台）可以直接再点对的台，
+      // 不必重新选一次食材。失败品/半成品这类「料已经吃掉」的情况由引擎侧兜住，不会走到这里。
+      this.fail(r.reason, null, r);
+      this.sfx('ingredient_wrong');
+      this.render();
+      return true;
+    }
+    this.sfx('ingredient_ok');
+    this.clearIngSelection();
     // 教学期间配方书展开后，一旦开始投料就收起，避免挡住工位
     if (this.game.s.tutorial.active && !this.el.recipe.classList.contains('hidden')) this.closeRecipe();
     this.render();
+    return true;
+  }
+
+  /** 取消「选中的食材」（不动成品选中 this.selected） */
+  clearIngSelection() {
+    this.selectedIng = null;
+    $$('.ing.sel', this.stage).forEach((e) => e.classList.remove('sel'));
+  }
+
+  /**
+   * 这个工位收不收这件食材（只用于「标出可放的台」的视觉提示）
+   * 复用引擎的 stationMismatch：busy / 输出槽占用 / 归属不对 都算「放不进去」。
+   */
+  stationRejectsIng(ingKey, stationKey) {
+    const mis = this.game.stationMismatch(ingKey, stationKey);
+    return !!(mis && mis.reason);
   }
 
   handleAct(el, e) {
@@ -335,15 +498,64 @@ export class View {
     else if (act === 'phone') this.phoneAction();
     else if (act === 'rider') this.riderAction();
     else if (act === 'ach') this.openAch();
+    else if (act === 'submit') this.submitFromStorage();
     else if (act === 'resume') { this.closeModal(); if (this.game.s.paused) this.game.togglePause(); this.render(); }
+  }
+
+  /**
+   * 仓库旁「一键提交」按钮（v2.17）
+   * 引擎按「剩余耐心最少（最接近流失）的顾客优先」把仓库里的成品交出去。
+   * 这里只负责：防连点 + 把 { ok, count, orders, reason } 翻成一句玩家看得懂的话。
+   */
+  submitFromStorage() {
+    const now = performance.now();
+    const cd = 280; // 防连点：同一秒手抖点三下也只交一次
+    if (now - (this.lastSubmitAt || 0) < cd) {
+      this.toast(this.t('storage.submitBusy'), 900);
+      return;
+    }
+    this.lastSubmitAt = now;
+    const btn = this.el.submitBtn;
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('cooling');
+      setTimeout(() => {
+        if (!btn) return;
+        btn.disabled = false;
+        btn.classList.remove('cooling');
+      }, cd);
+    }
+    let r;
+    try {
+      r = this.game.submitFromStorage();
+    } catch (err) {
+      // 引擎对配置缺失选择显式抛错，视图必须兜住，否则玩家只看到「点了没反应」
+      console.error('[OWK] 一键提交失败', err);
+      r = { ok: false, reason: 'configError' };
+    }
+    if (r.ok) {
+      this.sfx('order_done');
+      this.toast(this.t('storage.submitDone', { n: r.count, m: r.orders }));
+    } else {
+      const map = {
+        empty: 'storage.submitEmpty',
+        noCustomer: 'storage.submitNoCustomer',
+        noMatch: 'storage.submitNoMatch',
+        phase: 'toast.notNow',
+        configError: 'toast.configError',
+      };
+      const key = map[r.reason];
+      if (key) this.toast(this.t(key));
+      this.sfx('ingredient_wrong');
+    }
+    this.render();
   }
 
   doUpgrade(dev) {
     const r = this.game.upgrade(dev);
     if (r.ok) {
       const name = { stove: this.t('upgrade.stove'), counter: this.t('upgrade.counter'), sign: this.t('upgrade.sign'), trash: this.t('upgrade.trash') }[dev];
-      const refundTxt = r.refund > 0 ? `　${this.t('upgrade.refund', { n: r.refund })}` : `　${this.t('upgrade.noRefundFirst')}`;
-      this.toast(`${name} → Lv${r.lv}　-${r.cost}${refundTxt}`);
+      this.toast(this.t('upgrade.bought', { name, lv: r.lv, n: r.cost }));
     } else if (r.reason === 'coins') {
       this.toast(this.t('cost.short'));
     } else if (r.reason === 'max') {
@@ -387,7 +599,10 @@ export class View {
     const d = this.drag;
     if (!d) return;
     if (!d.moved) {
-      if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 8) return;
+      // v2.18 触控：手指按下时的抖动比鼠标大得多。舞台在手机横屏只有 0.59 倍缩放，
+      // 8 逻辑像素 ≈ 4.7 CSS 像素，轻点很容易被判成拖拽（点了没反应）。
+      // 触屏设备放宽到 14 逻辑像素（≈8 CSS 像素），鼠标仍用 8。
+      if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < this.dragSlop) return;
       d.moved = true;
       // 确认进入拖拽态后才阻止默认行为（避免长按选中/滚动，同时不干扰单纯点击）
       if (e.cancelable) e.preventDefault();
@@ -557,6 +772,9 @@ export class View {
   }
 
   selectItem(src, el) {
+    // 食材选中与成品选中互斥：选中成品时把食材的选中态清掉，
+    // 否则玩家会看到两个「选中」同时亮着，点顾客时还分不清要交什么。
+    this.clearIngSelection();
     this.selected = src;
     $$('.item.sel', this.stage).forEach((e) => e.classList.remove('sel'));
     el && el.classList.add('sel');
@@ -571,6 +789,9 @@ export class View {
   render() {
     const s = this.game.s;
     if (!s || !this.el) return;
+    // 打烊 / 周结 / 破产时把「选中的食材」清掉：否则下一局开门还挂着一个选中态，
+    // 玩家点任何台子都会莫名投料。
+    if (s.phase !== 'day' && this.selectedIng) this.clearIngSelection();
     if (s.phase === 'day' && !this.el.game.classList.contains('hidden')) this.syncTutorial();
 
     this.el.coins.textContent = Math.round(s.coins);
@@ -583,6 +804,14 @@ export class View {
     this.el.mode.textContent = this.t(s.mode === 'hard' ? 'difficulty.hard' : 'difficulty.normal');
     this.el.combo.textContent = `${this.t('combo.title')} ×${s.combo}`;
     this.el.combo.classList.toggle('on', s.combo > 0);
+    // 本周租金：开局就摆出来，玩家能提前知道要凑多少，而不是打烊时才发现差距
+    if (this.el.rent) {
+      const rent = this.game.rentForWeek(s.week);
+      this.el.rent.textContent = rent;
+      // 只在「临近周末且确实不够」时才标红——第 1 天就红会吓人（65 金币本来就不够 150）
+      const daysLeft = (this.ctx.config.economy.daysPerWeek || 7) - s.day;
+      this.el.rent.parentElement.classList.toggle('tight', s.coins < rent && daysLeft <= 1);
+    }
 
     this.renderWeather();
     this.renderPhone();
@@ -618,25 +847,44 @@ export class View {
 
   renderStations() {
     const s = this.game.s;
-    for (const key of ['food', 'drink']) {
+    // 遍历 s.stations 而不是写死 ['food','drink']：新增工位（如通用台）只加配置就能被渲染
+    for (const key of Object.keys(s.stations)) {
       const st = s.stations[key];
-      const panel = $(`.station[data-station="${key}"]`, this.el.stations);
+      const panel = $(`[data-panel-station="${key}"]`, this.stage);
+      if (!panel) continue;
       panel.classList.toggle('sel', s.selectedStation === key);
-      const lv = $('.st-lv', panel);
-      lv.textContent = 'Lv' + s.devices.stove;
+      // v2.18：选中食材时标出「这个台收不收它」——收得了的亮金框，收不了的压暗。
+      // 判据复用引擎 stationMismatch，所以「台子正忙 / 输出槽占着 / 归属不对」都会自动压暗，
+      // 不会出现「看起来能放、点下去报错」的假提示。
+      const picking = !!this.selectedIng;
+      const rejects = picking ? this.stationRejectsIng(this.selectedIng, key) : false;
+      // 教学期只给「这一步该点的台」亮金框，其余台保持中性（不压暗、也不发光）：
+      // 三个台都发光会让新手挑错台，而压暗又是在骗人（它其实能放）。
+      const tutTarget = this.tutorialStationTarget();
+      const guided = picking && !rejects && (!tutTarget || key === tutTarget);
+      panel.classList.toggle('can-drop', guided);
+      panel.classList.toggle('no-drop', picking && rejects);
+      const lv = $(`[data-lv="${key}"]`, panel);
+      if (lv) lv.textContent = 'Lv' + s.devices.stove;
       st.inputs.forEach((item, i) => {
         const slot = $(`.slot[data-slot="in${i}"]`, panel);
+        if (!slot) return;
         slot.innerHTML = item ? this.itemHTML(item, { zone: 'input', station: key, index: i }) : `<span class="slot-ph">+</span>`;
         slot.classList.toggle('filled', !!item);
       });
       const out = $('.slot[data-slot="out"]', panel);
-      out.innerHTML = st.output
-        ? this.itemHTML(st.output, { zone: 'output', station: key })
-        : (st.busy ? `<span class="slot-ph busy">${this.t('craft.combine')}</span>` : `<span class="slot-ph">—</span>`);
-      out.classList.toggle('filled', !!st.output);
+      if (out) {
+        // 通用台的输出格只有 54px（与专业台同尺寸），塞不下「咕嘟咕嘟…」整行字（会被裁开）——
+        // 那里的读条进度交给下方的进度条表达，格子里只留一个省略号。
+        const compact = panel.classList.contains('uni');
+        out.innerHTML = st.output
+          ? this.itemHTML(st.output, { zone: 'output', station: key })
+          : (st.busy ? `<span class="slot-ph busy">${compact ? '…' : this.t('craft.combine')}</span>` : `<span class="slot-ph">—</span>`);
+        out.classList.toggle('filled', !!st.output);
+      }
       panel.classList.toggle('busy', st.busy);
       const bar = $(`[data-bar-station="${key}"]`, panel);
-      bar.style.width = st.busy ? Math.min(100, (st.progress / st.duration) * 100) + '%' : '0%';
+      if (bar) bar.style.width = st.busy ? Math.min(100, (st.progress / st.duration) * 100) + '%' : '0%';
     }
   }
 
@@ -687,13 +935,22 @@ export class View {
       btn.classList.toggle('dim', !relevant);
       btn.classList.toggle('poor', s.coins < cost);
       btn.classList.toggle('tut', this.tutTargets.includes(`ing-${k}`));
+      // v2.18：点击链路的选中态（重建 DOM 后按 this.selectedIng 重放，不必额外记元素）
+      btn.classList.toggle('sel', this.selectedIng === k);
     }
   }
 
   renderTrash() {
     const s = this.game.s;
+    const rate = this.game.trashRefundRate || 0;
     this.el.trashLv.textContent = this.t('trash.level', { n: s.devices.trash });
-    this.el.trash.classList.toggle('cooling', s.trashCd > 0);
+    // 垃圾桶不再有冷却，角标下方只在**能返钱时**显示比例；0% 时干脆不显示，免得挂一句没用的字
+    const label = rate > 0 ? this.t('trash.refundTip', { p: Math.round(rate * 100) }) : '';
+    if (label !== this.lastTrashLabel) {
+      this.lastTrashLabel = label;
+      this.el.trashTip.textContent = label;
+    }
+    this.el.trash.classList.remove('cooling');
   }
 
   renderCustomers() {
@@ -729,6 +986,11 @@ export class View {
     // 签名必须区分「已交付」状态：filled 与 wants 同名时，用 filled||wants 会算出相同签名，
     // 导致交付后不重建 DOM、对勾不出现。
     const sig = `${c.items.map((i) => `${i.wants}:${i.filled ? 1 : 0}`).join(',')}|${c.vip}`;
+    // v2.19：交付会翻转某个 item 的 filled 位 → 签名变化 → 重建 innerHTML。
+    // 重建出的 <i> 会回退到 CSS 默认 width:100%（满条），下一个 frame() 才被设回真实比例，
+    // 配合 transition 表现为「跳满一下再恢复读秒」。这里在模板里直接写死当前比例，
+    // 新节点一出生就是正确宽度，杜绝满条闪烁。
+    const pRatio = c.tutorial ? 1 : Math.max(0, (c.patience || 0) / (c.patienceMax || 1));
     if (el.dataset.sig !== sig) {
       el.dataset.sig = sig;
       el.innerHTML = `
@@ -736,7 +998,7 @@ export class View {
           ${c.vip ? '<span class="vip-badge">VIP</span>' : ''}
           <button class="dismiss" data-act="dismiss" data-customer="${c.id}">×</button>
           <div class="order">${order}</div>
-          <div class="pbar"><i></i></div>
+          <div class="pbar"><i style="width:${(pRatio * 100).toFixed(1)}%"></i></div>
         </div>
         <div class="figure">${customerSVG(c.body, c.acc, c.vip)}</div>`;
     }
@@ -751,18 +1013,36 @@ export class View {
     const tut = s.tutorial;
     if (!tut.active) {
       this.el.tut.classList.add('hidden');
+      if (this.el.queue) this.el.queue.classList.remove('tut-on');
       this.tutTargets = [];
       return;
     }
     const map = {
+      // v2.18：点击改成「先选食材、再点台」，所以每一步都要同时高亮「食材」和「该点哪个台」，
+      // 否则玩家选完食材不知道下一步点哪里（cola 这步原来只亮两个食材，没有台）。
       bread: ['ing-bread', 'station-food'],
       patty: ['ing-patty', 'station-food'],
       serve: ['out-food', 'customer'],
-      cola: ['ing-syrup', 'ing-water'],
+      cola: ['ing-syrup', 'ing-water', 'station-drink'],
       serveCola: ['out-drink', 'customer'],
     };
-    this.tutTargets = map[tut.step] || [];
+    this.tutTargets = (map[tut.step] || []).slice();
+    // v2.18：成品可能出自任一工位（三个台都能做），输出槽高亮要跟着「谁真的出了这件」走，
+    // 否则汉堡从通用台出来时，金色描边还指在空着的主食台上。
+    if (tut.step === 'serve' || tut.step === 'serveCola') {
+      const want = tut.step === 'serve' ? 'burger' : 'cola';
+      const holder = Object.keys(s.stations).find((k) => s.stations[k].output && s.stations[k].output.key === want);
+      if (holder) {
+        this.tutTargets = this.tutTargets.filter((x) => !x.startsWith('out-'));
+        this.tutTargets.push('out-' + holder);
+      }
+    }
     this.el.tut.classList.remove('hidden');
+    // v2.19.4：教程局给队列挂 tut-on —— 客区高度是固定的（336），教程条要占掉一条，
+    // 顾客就必须让一点：否则「气泡 92 + 人物 187」超出顾客行可用高度，
+    // 气泡顶部会被 overflow:hidden 裁掉（玩家看到的就是「教程文字压住气泡」）。
+    // 非教程局没有这个 class，顾客仍是原尺寸。
+    if (this.el.queue) this.el.queue.classList.add('tut-on');
     this.el.tutText.textContent = this.t('tutorial.step.' + tut.step);
     // 高亮工位/输出槽/顾客
     $$('.station', this.el.stations).forEach((st) => {
@@ -776,15 +1056,27 @@ export class View {
   syncTutorial() {
     const s = this.game.s;
     if (!s.tutorial.active) return;
-    const food = s.stations.food;
-    const drink = s.stations.drink;
     const delivered = s.dayStats.delivered || 0;
+    // v2.18：三个台都能点了，教学不能再只盯 food / drink ——
+    // 玩家把面包点进通用台时，若这里仍只看 food.inputs，教学会永远停在 bread 步，
+    // 玩家看着「点主食台」的提示却已经放完了料，等于卡死。
+    // 所以判据改成「任一工位上有这件东西」（输入格 / 读条中 / 输出槽）。
+    const onAnyTray = (key) => Object.keys(s.stations).some((k) => {
+      const st = s.stations[k];
+      return st.inputs.some((x) => x && x.key === key)
+        || (st.busy && st.pendingId === key)
+        || (st.output && st.output.key === key);
+    });
+    const producing = (key) => Object.keys(s.stations).some((k) => {
+      const st = s.stations[k];
+      return (st.busy && st.pendingId === key) || (st.output && st.output.key === key);
+    });
     // 逐级推进（允许一次跨过已满足的步骤）
     for (let guard = 0; guard < 6; guard++) {
       const step = s.tutorial.step;
-      if (step === 'bread' && food.inputs.some((x) => x && x.key === 'bread')) {
+      if (step === 'bread' && onAnyTray('bread')) {
         s.tutorial.step = 'patty';
-      } else if (step === 'patty' && (food.busy || (food.output && food.output.key === 'burger'))) {
+      } else if (step === 'patty' && producing('burger')) {
         s.tutorial.step = 'serve';
       } else if (step === 'serve' && delivered >= 1) {
         s.tutorial.step = 'cola';
@@ -793,7 +1085,7 @@ export class View {
         // 该调用是幂等的，重复 render 不会堆出多个人。
         this.game.ensureTutorialCustomer('cola');
         this.openRecipe();
-      } else if (step === 'cola' && (drink.output || delivered >= 2)) {
+      } else if (step === 'cola' && (producing('cola') || delivered >= 2)) {
         s.tutorial.step = 'serveCola';
         // 兜底：若玩家把可乐放进了仓储/丢掉了，仍保证场上有可交付对象
         this.game.ensureTutorialCustomer('cola');
@@ -805,11 +1097,25 @@ export class View {
     }
   }
 
+  /**
+   * 教学当前这一步想让你点哪个台（v2.18：只用来做视觉引导，不拦截操作）
+   * 返回 null = 这一步不限制台子（如 serve / serveCola）。
+   */
+  tutorialStationTarget() {
+    const s = this.game.s;
+    if (!s || !s.tutorial || !s.tutorial.active) return null;
+    const step = s.tutorial.step;
+    if (step === 'bread' || step === 'patty') return 'food';
+    if (step === 'cola') return 'drink';
+    return null;
+  }
+
   /** 每帧：耐心、读条、垃圾桶冷却、营业倒计时 */
   frame() {
     const s = this.game.s;
     if (!s || this.el.game.classList.contains('hidden')) return;
     this.frameTimer(s);
+    this.framePhone(s);
     for (const c of s.customers) {
       const el = this.custEls.get(c.id);
       if (!el) continue;
@@ -821,18 +1127,53 @@ export class View {
       b.style.borderWidth = (2 + 3 * ratio).toFixed(1) + 'px';
       el.classList.toggle('danger', ratio < 0.2);
     }
-    for (const key of ['food', 'drink']) {
+    for (const key of Object.keys(s.stations)) {
       const st = s.stations[key];
-      const bar = $(`[data-bar-station="${key}"]`, this.el.stations);
+      const bar = $(`[data-bar-station="${key}"]`, this.stage);
       if (bar) bar.style.width = st.busy ? Math.min(100, (st.progress / st.duration) * 100) + '%' : '0%';
-      const panel = $(`.station[data-station="${key}"]`, this.el.stations);
+      const panel = $(`[data-panel-station="${key}"]`, this.stage);
       if (panel) panel.classList.toggle('busy', st.busy);
     }
-    const label = s.trashCd > 0 ? this.t('trash.cooldown') + ' ' + (s.trashCd / 1000).toFixed(1) + 's' : '';
-    if (label !== this.lastTrashLabel) {
-      this.lastTrashLabel = label;
-      this.el.trashTip.textContent = label;
-      this.el.trash.classList.toggle('cooling', s.trashCd > 0);
+    // 垃圾桶不再有冷却，角标由 renderTrash() 统一维护，这里不再逐帧改文案
+  }
+
+  /**
+   * v2.19：手机上的外卖倒计时**逐帧**刷新。
+   *
+   * 之前倒计时只在 `change` 事件里随 `renderPhone()` 重绘：玩家不投料、顾客不流失时
+   * 根本没有 change，秒数就冻在最后一次重绘的值上 —— 表现是「最后几秒不显示，
+   * 直接跳到骑手到店」。这里只改文本与进度条宽度，不重建 DOM（避免每帧 innerHTML）。
+   */
+  framePhone(s) {
+    const el = this.el.phone;
+    if (!el || !s.deliveries || !s.deliveries.length) return;
+    const cur = s.deliveries.find((d) => d.status === 'preview' || d.status === 'picked_up');
+    if (!cur) return;
+    // DOM 上画的不是这一单（比如正在展示「刚送达」的另一单）就交给 render() 重建
+    if (el.dataset.did !== String(cur.id)) return;
+    const scr = this.el.phoneScreen;
+    const t = s.time;
+    const timeEl = scr.querySelector('.ph-time');
+    const barEl = scr.querySelector('.ph-bar > i');
+    const dc = this.ctx.config.delivery || {};
+    if (cur.status === 'preview') {
+      const left = Math.max(0, Math.ceil((cur.riderAt - t) / 1000));
+      const txt = this.t('delivery.pickupIn', { n: left });
+      if (timeEl && timeEl.textContent !== txt) timeEl.textContent = txt;
+      const previewMs = typeof dc.previewMs === 'number' ? dc.previewMs : 0;
+      if (barEl && previewMs > 0) {
+        const ratio = Math.max(0, Math.min(1, 1 - (cur.riderAt - t) / previewMs));
+        barEl.style.width = Math.round(ratio * 100) + '%';
+      }
+      return;
+    }
+    const left = Math.max(0, Math.ceil(((cur.deliveredAt || 0) - t) / 1000));
+    const txt = this.t('delivery.deliverIn', { n: left });
+    if (timeEl && timeEl.textContent !== txt) timeEl.textContent = txt;
+    const settleMs = typeof dc.deliverySettleMs === 'number' ? dc.deliverySettleMs : 0;
+    if (barEl && settleMs > 0) {
+      const ratio = Math.max(0, Math.min(1, 1 - (left * 1000) / settleMs));
+      barEl.style.width = Math.round(ratio * 100) + '%';
     }
   }
 
@@ -972,45 +1313,34 @@ export class View {
   closeUpgrade() { this.el.upgrade.classList.add('hidden'); }
 
   renderUpgrade() {
-    const devs = [
-      ['stove', this.t('upgrade.stove'), 'stepTime'],
-      ['counter', this.t('upgrade.counter'), 'earned ×'],
-      ['sign', this.t('upgrade.sign'), 'patience ×'],
-      ['trash', this.t('upgrade.trash'), 'cooldown'],
-    ];
-    const rows = devs.map(([key, name, eff]) => {
+    // 每一行只说人话：作用 + 现在 → 下一级 + 花费。不用英文标记、不用毫秒（时间一律折成秒）
+    const rows = ['stove', 'counter', 'sign', 'trash'].map((key) => {
       const info = this.game.deviceInfo(key);
-      let spec;
-      if (key === 'trash') {
-        spec = info.maxed ? `${info.cur}ms` : `${info.cur}ms → ${info.next}ms`;
-      } else {
-        spec = info.maxed ? this.fmtDev(key, info.cur) : `${this.fmtDev(key, info.cur)} → ${this.fmtDev(key, info.next)}`;
-      }
+      const spec = info.maxed ? this.devText(key, info.cur) : `${this.devText(key, info.cur)} → ${this.devText(key, info.next)}`;
       const btn = info.maxed
         ? `<button class="btn sm" disabled>${this.t('upgrade.max')}</button>`
-        : `<button class="btn sm primary" data-act="upgrade-dev" data-dev="${key}" ${this.game.s.coins < info.cost ? 'disabled' : ''}>
-             ${this.t('upgrade.cost', { n: info.cost })}
-           </button>`;
-      const refund = info.maxed ? '' : `<em class="refund">${info.refund > 0 ? this.t('upgrade.refundInline', { n: info.refund }) : this.t('upgrade.noRefundFirst')}</em>`;
+        : `<button class="btn sm primary" data-act="upgrade-dev" data-dev="${key}" ${this.game.s.coins < info.cost ? 'disabled' : ''}>${this.t('upgrade.cost', { n: info.cost })}</button>`;
       return `<div class="up-row">
-        <div class="up-name"><b>${name}</b><span>Lv${info.lv} / ${info.max}　<span class="eff">${eff}</span></span></div>
-        <div class="up-spec">${spec}${refund}</div>
+        <div class="up-name"><b>${this.t('upgrade.' + key)}</b><span>Lv${info.lv} / ${info.max}　<span class="eff">${this.t('upgrade.' + key + '.what')}</span></span></div>
+        <div class="up-spec">${spec}</div>
         ${btn}
       </div>`;
     }).join('');
     this.el.upgrade.innerHTML = `
       <div class="panel-head">
         <b>${this.t('upgrade.title')}</b>
-        <div class="panel-menu"><i>${this.t('upgrade.instant')} · ${this.t('upgrade.refund', { n: Math.round(this.ctx.config.devices.refund.rate * 100) + '%' })}</i></div>
+        <div class="panel-menu"><i>${this.t('upgrade.instant')}</i></div>
         <button class="mini icon" data-act="close-upgrade">${this.t('btn.close')}</button>
       </div>
       <div class="panel-body single">${rows}</div>`;
   }
 
-  fmtDev(key, v) {
-    if (key === 'stove') return v + 'ms';
-    if (key === 'trash') return v + 'ms';
-    return '×' + v;
+  /** 把设备数值翻成人话：时间折成秒、比例折成百分比 */
+  devText(key, v) {
+    if (v == null) return '—';
+    if (key === 'stove') return this.t('upgrade.sec', { n: (v / 1000).toFixed(1) });
+    if (key === 'trash') return this.t('upgrade.pct', { n: Math.round(v * 100) });
+    return this.t('upgrade.pctPlus', { n: Math.round((v - 1) * 100) });
   }
 
   // ============================================================ modals
@@ -1029,7 +1359,7 @@ export class View {
       </div>
       <div class="modal-body">${body}</div>
       ${footNote ? `<p class="modal-note small">${footNote}</p>` : ''}
-      <div class="modal-actions">${this.modalActions.map((a, i) => `<button class="btn ${a.primary ? 'primary' : ''}" data-mi="${i}">${a.label}</button>`).join('')}</div>
+      <div class="modal-actions">${this.modalActions.map((a, i) => `<button class="btn ${a.primary ? 'primary' : ''}" data-mi="${i}"${a.disabled ? ' disabled' : ''}>${a.label}</button>`).join('')}</div>
     </div>`;
     this.el.modal.classList.remove('hidden');
     $$('[data-mi]', this.el.modal).forEach((b) => {
@@ -1104,6 +1434,10 @@ export class View {
       // 配置类异常（如 delivery.deliverySettleMs 缺失时引擎会 throw）：
       // 兜住后给玩家一句明确提示，而不是「拖给骑手毫无反应」
       configError: this.t('toast.configError'),
+      // v2.17：通用台不做中间产物 —— 投料时就被拒绝（没扣钱、没动料）
+      noIntermediate: this.t('toast.noIntermediate', {
+        name: extra && extra.recipeId ? this.t('mid.' + extra.recipeId) : this.t('recipe.intermediate'),
+      }),
     };
     let msg = map[reason];
     // v2.9：拖错灶台时按「实际拖到的灶台」给一句可爱提示。
@@ -1120,38 +1454,101 @@ export class View {
 
   togglePause() {
     const paused = this.game.togglePause();
-    if (paused) {
-      const au = window.__OWK_AUDIO__;
-      const ast = (au && au.state) || { music: true, sfx: true };
-      this.modal({
-        title: this.t('pause.title'),
-        body: `<p class="p">${this.t('pause.desc')}</p>
-          <div class="set-row"><span>${this.t('settings.music')}</span>
-            <button class="switch ${ast.music ? 'on' : ''}" data-set="music" role="switch" aria-checked="${ast.music}">${ast.music ? this.t('settings.on') : this.t('settings.off')}</button></div>
-          <div class="set-row"><span>${this.t('settings.sfx')}</span>
-            <button class="switch ${ast.sfx ? 'on' : ''}" data-set="sfx" role="switch" aria-checked="${ast.sfx}">${ast.sfx ? this.t('settings.on') : this.t('settings.off')}</button></div>`,
-        actions: [
-          { label: this.t('pause.resume'), primary: true, onClick: () => { if (this.game.s.paused) this.game.togglePause(); this.render(); } },
-          { label: this.t('btn.menu'), onClick: () => this.onQuit && this.onQuit() },
-        ],
-      });
-      $$('[data-set]', this.el.modal).forEach((b) => {
-        b.onclick = () => {
-          const a = window.__OWK_AUDIO__;
-          if (!a) return;
-          const k = b.dataset.set;
-          const next = !(k === 'music' ? a.state.music : a.state.sfx);
-          if (k === 'music') a.setMusic(next); else a.setSfx(next);
-          b.classList.toggle('on', next);
-          b.textContent = next ? this.t('settings.on') : this.t('settings.off');
-          b.setAttribute('aria-checked', String(next));
-        };
-      });
-    } else this.closeModal();
+    if (paused) this.showPauseModal();
+    else this.closeModal();
+  }
+
+  /**
+   * 暂停面板（从 togglePause 里抽出来，v2.20.0）。
+   *
+   * 抽出的原因：返回键的二次确认框会临时顶掉暂停面板，玩家点「取消」时
+   * 必须把暂停面板放回来 —— 否则会停在「时间冻结、但没有任何弹层可操作」的死状态。
+   * 行为与原实现完全一致：开关音量、继续、回主菜单。
+   */
+  showPauseModal() {
+    const au = window.__OWK_AUDIO__;
+    const ast = (au && au.state) || { music: true, sfx: true };
+    this.modal({
+      title: this.t('pause.title'),
+      body: `<p class="p">${this.t('pause.desc')}</p>
+        <div class="set-row"><span>${this.t('settings.music')}</span>
+          <button class="switch ${ast.music ? 'on' : ''}" data-set="music" role="switch" aria-checked="${ast.music}">${ast.music ? this.t('settings.on') : this.t('settings.off')}</button></div>
+        <div class="set-row"><span>${this.t('settings.sfx')}</span>
+          <button class="switch ${ast.sfx ? 'on' : ''}" data-set="sfx" role="switch" aria-checked="${ast.sfx}">${ast.sfx ? this.t('settings.on') : this.t('settings.off')}</button></div>`,
+      actions: [
+        { label: this.t('pause.resume'), primary: true, onClick: () => { if (this.game.s.paused) this.game.togglePause(); this.render(); } },
+        { label: this.t('btn.menu'), onClick: () => this.onQuit && this.onQuit() },
+      ],
+    });
+    $$('[data-set]', this.el.modal).forEach((b) => {
+      b.onclick = () => {
+        const a = window.__OWK_AUDIO__;
+        if (!a) return;
+        const k = b.dataset.set;
+        const next = !(k === 'music' ? a.state.music : a.state.sfx);
+        if (k === 'music') a.setMusic(next); else a.setSfx(next);
+        b.classList.toggle('on', next);
+        b.textContent = next ? this.t('settings.on') : this.t('settings.off');
+        b.setAttribute('aria-checked', String(next));
+      };
+    });
+  }
+
+  /**
+   * 返回键二次确认（v2.20.0）。
+   *
+   * 调用方（main.js 的 onBack）负责在调用前 persist() —— 视图层只管「问一句」。
+   * 语义：
+   *   · 确认 → 若正暂停着先恢复计时（否则回主页后引擎还冻着），再执行 onConfirm（回主页）；
+   *   · 取消 → 留在局中；若进来之前是暂停面板，把它原样放回去。
+   * @param {{title: string, body: string, okLabel: string, cancelLabel: string, onConfirm: Function}} opts
+   */
+  confirmBack({ title, body, okLabel, cancelLabel, onConfirm }) {
+    const wasPaused = !!(this.game.s && this.game.s.paused);
+    // v2.20.0 修复（QA 实测回归）：弹层一出现就必须冻结。
+    // 原来只记 wasPaused、不暂停 —— 玩家盯着「要回主菜单吗？」的每一秒都在流失：
+    // 实测停 2.5 秒，游戏内时间 2398 → 4898、dayTimeLeft 同步掉、顾客耐心照扣。
+    // 弹层文案还写着「进度会存进继续上次」，一边安慰一边扣时间，尤其难看。
+    // 复用现成的 shopPaused 机制（和商店弹层同一套）：closeModal() 会走
+    // restoreShopPause() 自动解冻，所以这里不用再手动恢复。
+    // 只有在「本来没暂停」时才设 shopPaused —— 否则会把玩家自己按的暂停在关弹窗时误解除。
+    if (!wasPaused) {
+      this.game.togglePause();
+      this.shopPaused = true;
+    }
+    this.modal({
+      title,
+      body: `<p class="p">${body}</p>`,
+      actions: [
+        {
+          label: okLabel,
+          primary: true,
+          onClick: () => {
+            // 回主页前必须是「未暂停」：closeModal → restoreShopPause 已经解冻了我们按下的那次；
+            // 若进来前就是玩家自己的暂停态，这里补一次解冻，避免带着 paused=true 回主页。
+            if (this.game.s && this.game.s.paused) this.game.togglePause();
+            if (onConfirm) onConfirm();
+          },
+        },
+        {
+          label: cancelLabel,
+          onClick: () => {
+            // 取消 = 留在局中，并且**回到进来之前的状态**：
+            //   · 本来在营业 → restoreShopPause 已恢复营业，什么都不用做；
+            //   · 本来在暂停面板（或商店弹层）→ 把暂停面板放回去。
+            //     这里必须重新确认 paused，因为商店那条路径的 restoreShopPause 已经解冻过了。
+            if (wasPaused) {
+              if (!this.game.s.paused) this.game.togglePause();
+              this.showPauseModal();
+            }
+          },
+        },
+      ],
+    });
   }
 
   // ============================================================ screens
-  showMenu(hasSave, hardUnlocked) {
+  showMenu(hasSave, hardUnlocked, bankruptWeek = 0) {
     this.el.menu.classList.remove('hidden');
     this.el.game.classList.add('hidden');
     this.el.menu.innerHTML = `
@@ -1163,7 +1560,7 @@ export class View {
         </div>
         <div class="menu-right">
           <div class="menu-cat">
-            <span class="catbal" title="${this.t('cat.title')}">${icon('catcoin')}<b id="menu-cat-coins">0</b></span>
+            <button class="catbal" type="button" id="btn-cat-income" title="${this.t('cat.income.hint')}" aria-label="${this.t('cat.income.hint')}">${icon('catcoin')}<b id="menu-cat-coins">0</b></button>
           </div>
           <div class="menu-entry">
             <button class="btn sm" id="btn-shop">${icon('catcoin')}<span>${this.t('shop.entry')}</span></button>
@@ -1187,6 +1584,7 @@ export class View {
             <button class="btn primary big" id="btn-start">${this.t('menu.start')}</button>
             ${hasSave ? `<button class="btn big" id="btn-continue">${this.t('menu.continue')}</button>` : ''}
           </div>
+          ${bankruptWeek ? `<p class="hint bad">${this.t('menu.lastBankrupt', { n: bankruptWeek })}</p>` : ''}
           <p class="hint">${this.t('menu.tip')}</p>
         </div>
       </div>`;
@@ -1211,6 +1609,10 @@ export class View {
     if (wxBtn) wxBtn.onclick = () => this.openWeatherIntro();
     const setBtn = $('#btn-set');
     if (setBtn) setBtn.onclick = () => this.openSettings();
+    // 点猫猫币余额 → 说明「怎么赚」。主菜单不在 #screen-game 里，onClick 的委托
+    // 第一条守卫就会 return，所以这里必须直接绑，不能挂 data-act 指望冒泡。
+    const catBtn = $('#btn-cat-income');
+    if (catBtn) catBtn.onclick = () => this.openCatIncome();
     this.syncMenuCat();
     const cont = $('#btn-continue');
     if (cont) cont.onclick = () => this.onContinue && this.onContinue();
@@ -1226,15 +1628,20 @@ export class View {
     const s = this.game.s;
     const daysPerWeek = (this.ctx.config.economy && this.ctx.config.economy.daysPerWeek) || 7;
     const isLast = s.day >= daysPerWeek;
+    // 灶台上还剩几件：明天会被清空，必须在「下一天」按钮按下之前提醒
+    const tray = Object.values(s.stations || {}).reduce(
+      (a, st) => a + st.inputs.filter(Boolean).length + (st.output ? 1 : 0) + (st.busy && st.pendingId ? 1 : 0), 0);
     this.modal({
       title: this.t('day.title', { n: stats.day }),
-      body: `<div class="stat-grid">
+      body: `<p class="p">${this.t('toast.dayDone')}</p>
+      <div class="stat-grid">
         <div><b>${stats.served}</b><span>${this.t('stat.served')}</span></div>
         <div><b>${stats.lost}</b><span>${this.t('stat.lost')}</span></div>
         <div><b>${stats.waste}</b><span>${this.t('stat.waste')}</span></div>
         <div><b>${stats.earned + stats.bonus}</b><span>${this.t('stat.todayIncome')}</span></div>
       </div>
       <p class="coinline">${this.t('stat.coins')} <b>${Math.round(s.coins)}</b></p>
+      ${tray > 0 ? `<p class="p small tray-warn">${this.t('day.trayLeft', { n: tray })}</p>` : ''}
       ${(stats.deliveryServed || stats.deliveryPending)
         ? `<p class="delivline">${this.t('delivery.today', { n: (stats.deliveryServed || 0) + (stats.deliveryPending || 0), coins: stats.deliveryRevenue || 0 })}</p>`
         : ''}
@@ -1295,17 +1702,20 @@ export class View {
   // 不消耗金币」的规则**自动发放**（engine.grantCoinBonus）。此处保留只读展示，不含任何按钮与交互。
 
   showBankrupt(w) {
+    // 本局到此结束：不再提供「重开本周」。回主页后金币与设备等级在下一次开局时全部归零，
+    // 猫猫币与成就留在局外存档里（main.js 的 cats / ach 是独立键，不受本局重置影响）。
+    const short = w.shortfall != null ? w.shortfall : Math.max(0, Math.round(-(w.coins || 0)));
     this.modal({
       title: this.t('bankrupt.title'),
       tone: 'bad',
       body: `<p class="p">${this.t('bankrupt.desc')}</p>
         <div class="stat-grid two">
           <div><b>${w.rent}</b><span>${this.t('stat.rent')}</span></div>
-          <div><b>${Math.round(this.game.s.weekStartCoins)}</b><span>${this.t('bankrupt.coins')}</span></div>
-        </div>`,
+          <div><b>${short}</b><span>${this.t('bankrupt.shortfall')}</span></div>
+        </div>
+        <p class="p small">${this.t('bankrupt.summary', { served: w.served || 0, earned: Math.round(w.earned || 0) })}</p>`,
       actions: [
-        { label: this.t('bankrupt.retry'), primary: true, onClick: () => { this.game.retryWeek(); this.saveNow(); this.render(); } },
-        { label: this.t('btn.menu'), onClick: () => this.onQuit && this.onQuit() },
+        { label: this.t('bankrupt.backHome'), primary: true, onClick: () => this.onQuit && this.onQuit() },
       ],
     });
   }
@@ -1328,9 +1738,31 @@ export class View {
     root.setProperty('--keycap-side', th.keycapSide || '#E8DCC8');
     root.setProperty('--keycap-text', th.keycapText || '#6B6055');
     root.setProperty('--keycap-gloss', th.keycapGloss || 'rgba(255,255,255,.5)');
-    // --ink 是固定的深色（#2B2B2B），深色皮肤下会与背景撞色。
-    // 这里按皮肤背景亮度推一个「正文强色」，供卡片标题等需要强调的文字使用。
-    root.setProperty('--ink-strong', View.isDarkHex(th.bg) ? '#F4EFE4' : '#2B2B2B');
+    // 深色主题必须「整组」翻转，不能只换背景：
+    // 只改 --paper 而卡片仍是 #fff、弱文字仍是浅灰，就会出现「白卡片 + 浅灰字」（对比度 1.9），
+    // 而继承 body 的默认文字又是固定的深色 --ink（对比度 1.09）。三样一起翻才自洽。
+    const dark = View.isDarkHex(th.bg);
+    // 描边色：浅色主题是深描边配白卡，深色主题反过来用浅描边配深卡
+    root.setProperty('--ink', dark ? '#E9E4D8' : '#2B2B2B');
+    // 正文强色（标题、数字）
+    root.setProperty('--ink-strong', dark ? '#F6F2E8' : '#2B2B2B');
+    // 表面：卡片 / 格子 / 按钮填充
+    root.setProperty('--surface', dark ? '#363A55' : '#FFFFFF');
+    // 次级表面：槽底、进度条轨道、徽章底
+    root.setProperty('--surface-2', dark ? '#2E3149' : '#F7F2E6');
+    // 强调表面：输出槽、选中态、VIP 气泡
+    root.setProperty('--surface-accent', dark ? '#3F4468' : '#FFF8E7');
+    // 弱文字两档：辅助说明 / 占位符号
+    root.setProperty('--muted', dark ? '#A7ADC6' : '#A79C87');
+    root.setProperty('--faint', dark ? '#B4BACF' : '#BEB5A2');
+    // 暖金文字（价格、链接、提示徽标）
+    root.setProperty('--warm-ink', dark ? '#D9BE7E' : '#8C7A4E');
+    // 客人队列的斜纹背景写在 data URI 里，没法读 CSS 变量，只能整条换掉
+    root.setProperty('--queue-deco', dark
+      ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Crect width='26' height='26' fill='%233F4468'/%3E%3Crect width='4' height='26' fill='%23464C74'/%3E%3C/svg%3E\")"
+      : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Crect width='26' height='26' fill='%23FFF7E8'/%3E%3Crect width='4' height='26' fill='%23FAEDD6'/%3E%3C/svg%3E\")");
+    // 供 CSS 里少数「没法纯靠变量解决」的特例做覆盖（警告色、成就徽章等）
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     // theme 段没有 id 字段（皮肤才是 id 持有者），记皮肤 id 才不会变成 undefined（L17）
     this.skinId = sk.id;
   }
@@ -1433,17 +1865,9 @@ export class View {
           this.renderSettings(code);
           return;
         }
-        // 导入
-        const input = window.prompt(this.t('settings.importPrompt'), '');
-        if (input == null) return;
-        const r = api.importSaveCode(input);
-        if (r.ok) {
-          this.toast(this.t('settings.importOk'));
-          // 存档在 boot 时一次性读入内存，必须重载才能生效
-          setTimeout(() => location.reload(), 700);
-        } else {
-          this.toast(r.reason === 'empty' ? this.t('settings.importEmpty') : this.t('settings.importBad'));
-        }
+        // 导入：走游戏内弹层。
+        // 旧版用 window.prompt —— Android WebView 未实现时会静默失败，玩家完全不知道发生了什么。
+        this.openImportDialog();
       };
     });
     // 导出后把 textarea 内容全选中，方便直接 Ctrl+C
@@ -1453,6 +1877,121 @@ export class View {
       setTimeout(() => { try { codeBox.focus(); codeBox.select(); } catch (e) { /* 忽略 */ } }, 60);
     }
     this.updateVolHint();
+  }
+
+  /** 存档码里每个键在弹层预览里叫什么 */
+  static get SAVE_KEY_LABEL() {
+    return {
+      'owk.cats.v1': 'import.k.cats',
+      'owk.ach.v1': 'import.k.ach',
+      'owk.hard.unlocked': 'import.k.hard',
+      'owk.save.v1': 'import.k.save',
+      'owk.audio.v1': 'import.k.audio',
+    };
+  }
+
+  /**
+   * 导入存档码弹层。
+   * 取代旧的 window.prompt：文本框常驻可编辑、边输边校验、无效时按钮禁用，
+   * 这样玩家在按下「导入」之前就知道这串码能不能用（导入是破坏性操作，不该靠试）。
+   */
+  openImportDialog() {
+    const api = window.__OWK__;
+    this.modal({
+      title: this.t('import.title'),
+      closable: true,
+      body: `<div class="imp">
+        <p class="imp-desc">${this.t('import.desc')}</p>
+        <textarea id="imp-code" class="imp-code" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="${this.t('import.placeholder')}"></textarea>
+        <div class="imp-tools">
+          <button class="btn sm" data-imp="paste" type="button">${this.t('import.paste')}</button>
+          <button class="btn sm" data-imp="clear" type="button">${this.t('import.clear')}</button>
+        </div>
+        <p id="imp-status" class="imp-status"></p>
+      </div>`,
+      actions: [
+        { label: this.t('btn.close') },
+        {
+          label: this.t('import.do'),
+          primary: true,
+          disabled: true,
+          onClick: () => {
+            if (!parsed) return;
+            const r = api.importSaveCode(parsed);
+            if (!r.ok) { this.toast(this.t('settings.importBad')); return; }
+            // reload 会触发 beforeunload → persist()，用内存旧状态覆盖刚写入的键
+            // （实测会把 owk.hard.unlocked 冲成 false），所以先关掉写入路径
+            if (api.suppressPersist) api.suppressPersist();
+            this.toast(this.t('settings.importOk'));
+            setTimeout(() => location.reload(), 700);
+          },
+        },
+      ],
+    });
+
+    const box = $('#imp-code', this.el.modal);
+    const status = $('#imp-status', this.el.modal);
+    const doBtn = $$('[data-mi]', this.el.modal)[1];
+    if (!box || !status || !doBtn) return;
+    let parsed = null;
+
+    const refresh = () => {
+      // 解析用清洗过的串（从聊天软件复制常带换行/全角空格），但**不改写**框里的内容，
+      // 免得光标乱跳；玩家自己也能看出码有没有被折行。
+      const clean = String(box.value || '').replace(/[\s\u200b-\u200d\ufeff]/g, '');
+      parsed = null;
+      if (!clean) {
+        status.textContent = '';
+        status.className = 'imp-status';
+        doBtn.disabled = true;
+        return;
+      }
+      const r = api.inspectSaveCode ? api.inspectSaveCode(clean) : { ok: false, reason: 'badCode' };
+      if (!r.ok) {
+        const key = r.reason === 'badPrefix' ? 'import.badPrefix' : 'import.badCode';
+        status.textContent = this.t(key);
+        status.className = 'imp-status bad';
+        doBtn.disabled = true;
+        return;
+      }
+      parsed = clean;
+      const label = View.SAVE_KEY_LABEL;
+      const list = r.keys.map((k) => this.t(label[k] || 'import.k.save')).join('、');
+      // 时间戳只取日期：完整 ISO 串在手机上会折成两行
+      const at = r.at ? this.t('import.hasAt', { at: r.at.slice(0, 10) }) : '';
+      status.textContent = this.t('import.valid', { n: r.keys.length, list }) + at;
+      status.className = 'imp-status ok';
+      doBtn.disabled = false;
+    };
+
+    box.oninput = refresh;
+    // 浏览器要到 paste 之后才把内容写进 value，这里等一拍再校验
+    box.onpaste = () => setTimeout(() => { refresh(); box.scrollTop = 0; }, 0);
+
+    const pasteBtn = $('[data-imp="paste"]', this.el.modal);
+    if (pasteBtn) {
+      pasteBtn.onclick = async () => {
+        try {
+          const txt = await navigator.clipboard.readText();
+          if (txt) { box.value = txt; refresh(); box.scrollTop = 0; }
+        } catch (e) {
+          // 非安全上下文 / 未授权：提示手动粘贴，不当作错误弹红
+          this.toast(this.t('import.pasteFail'));
+        }
+        try { box.focus(); } catch (e) { /* 移动端可能不允许 */ }
+      };
+    }
+    const clearBtn = $('[data-imp="clear"]', this.el.modal);
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        box.value = '';
+        refresh();
+        try { box.focus(); } catch (e) { /* 忽略 */ }
+      };
+    }
+
+    // 打开就聚焦：桌面可以直接 Ctrl+V，移动端会拉起键盘
+    setTimeout(() => { try { box.focus(); } catch (e) { /* 忽略 */ } }, 80);
   }
 
   /**
@@ -1486,7 +2025,7 @@ export class View {
     // 以「实际套用的皮肤」为准（applyTheme 的入参），其次才回落到局外存档里的 skin
     const id = this.skinId || this.catStore.skin;
     const sk = skins.find((x) => x.id === id) || skins[0];
-    return (sk && sk.themeName) || (sk && this.t(sk.nameKey)) || '';
+    return (sk && sk.themeName) || '';
   }
 
   // ============================================================ 主页配方书（标签 + 详情 + 设为常做）
@@ -1589,7 +2128,54 @@ export class View {
     });
   }
 
+  // ============================================================ 猫猫币获取说明
+  /**
+   * 主页点「猫猫币余额」弹出的收入说明。
+   *
+   * 所有数字都从 config 现算（catCoins / achievements），**不写死**：
+   * 改每日奖励、周上限或成就奖励都只动 JSON，说明自动跟着变，
+   * 不会出现「面板写 10、实际发 20」这种两套口径。
+   * 外卖不发猫猫币（引擎侧已移除），所以这里也不列 —— 说明与实现同源。
+   */
+  catIncomeBody() {
+    const cc = this.ctx.config.catCoins || {};
+    const perDay = cc.perDay || 0;
+    const perWeek = cc.perWeek || 0;
+    const mul = cc.hardMul || 1;
+    const rate = cc.exchangeRate || 25;
+    const cap = cc.weeklyExchangeCap || 100;
 
+    const list = (this.ctx.config.achievements && this.ctx.config.achievements.list) || [];
+    const rewards = list.map((a) => a.reward || 0);
+    const total = rewards.reduce((a, b) => a + b, 0);
+    const min = rewards.length ? Math.min(...rewards) : 0;
+    const max = rewards.length ? Math.max(...rewards) : 0;
+
+    const hard = mul > 1 ? this.t('cat.income.hard', { n: mul }) : '';
+    const row = (ic, title, note, val) => `<div class="inc-row">
+        <span class="inc-ic">${icon(ic)}</span>
+        <div class="inc-main"><b>${title}</b>${note ? `<i>${note}</i>` : ''}</div>
+        <em class="inc-val">${val}</em>
+      </div>`;
+
+    return `<p class="p small">${this.t('cat.income.sub')}</p>
+      <div class="inc-list">
+        ${row('catcoin', this.t('cat.income.day'), hard, `+${perDay}`)}
+        ${row('star', this.t('cat.income.week'), this.t('cat.income.weekNote') + (hard ? ` · ${hard}` : ''), `+${perWeek}`)}
+        ${row('coin', this.t('cat.income.bonus'), this.t('cat.income.bonusNote', { rate }), this.t('cat.income.bonusCap', { cap }))}
+        ${row('check', this.t('cat.income.ach'), this.t('cat.income.achNote', { count: list.length, min, max }), this.t('cat.income.achTotal', { total }))}
+      </div>`;
+  }
+
+  openCatIncome() {
+    this.modal({
+      title: this.t('cat.income.title'),
+      closable: true,
+      body: this.catIncomeBody(),
+      actions: [{ label: this.t('btn.close'), primary: true }],
+      footNote: this.t('cat.income.foot'),
+    });
+  }
 
   // ================================================================ 手机（外卖）
   renderPhone() {
@@ -1655,7 +2241,8 @@ export class View {
   }
 
   /**
-   * 骑手：到店出现，交付后**立即消失**（v2.8：不再播放离场动画，店内不留骑手）
+   * 骑手（v2.19）：改成和普通顾客一样的形态 —— 人物 + 头顶气泡（气泡里是外卖餐点 + 「外卖」角标），
+   * 站在队列最右端（CSS 的 order:9999）。到店出现，交付后**立即消失**（v2.8：店内不留骑手）。
    */
   renderRider(d) {
     const el = this.el.rider;
@@ -1663,12 +2250,17 @@ export class View {
     const show = d && d.status === 'rider_arrived';
     el.classList.toggle('hidden', !show);
     el.classList.remove('leaving');
-    if (show) {
-      el.innerHTML = riderSVG();
-      el.title = this.t('delivery.riderHere');
-    } else {
+    if (!show) {
       el.innerHTML = '';
+      return;
     }
+    el.innerHTML = `
+      <div class="bubble rdr-bubble">
+        <span class="rdr-tag">${this.t('delivery.tag')}</span>
+        <div class="order"><span class="ord">${icon(d.item)}</span></div>
+      </div>
+      <div class="figure rdr-figure">${riderSVG()}</div>`;
+    el.title = this.t('delivery.riderHere');
   }
 
   /** 点击手机：播报当前外卖单状态（真正交付靠把餐点拖到骑手身上） */
@@ -1844,21 +2436,20 @@ export class View {
 
   /**
    * 让小猫说一句话。
-   * @param {boolean} [force] 冷却中是否强制说出（冷却中只播冷却提示，不做游戏化播报）
+   *
+   * 换句 CD（{@link CAT_BUBBLE_CD_MS}）内**直接返回**：既不换词，也不重新弹出气泡，
+   * 让上一句按自己的 2.6 秒节奏自然消失。点猫本身的反馈（爱心 / 挤压 / 猫叫）
+   * 由 {@link petCat} 负责，与这里解耦——所以玩家不会感到"被拒绝"。
    */
-  sayFromCat(force) {
+  sayFromCat() {
     const el = this.el.catBubble;
     if (!el) return;
     const now = performance.now();
 
     // 注意：lastSay 必须初始化为 -Infinity，而不是 0。
-    // v2.9.1 真实 bug：初值 0 时 `performance.now() - 0 < 5000` 在开局头5 秒恒成立，
-    // 导致玩家**第一次点猫就看到「让我歇一小会儿」**，像坏了。
-    if (!force && this.lastSay !== -Infinity && now - this.lastSay < CAT_BUBBLE_CD_MS) {
-      el.textContent = this.t('cat.bubble.cooldown');
-      this.pulseBubble(true);
-      return;
-    }
+    // v2.9.1 真实 bug：初值 0 时 `performance.now() - 0 < CD` 在开局头一段恒成立
+    // （当时 CD 是 5 秒，现为 1 秒），导致玩家**第一次点猫就看不到文案**，像坏了。
+    if (this.lastSay !== -Infinity && now - this.lastSay < CAT_BUBBLE_CD_MS) return;
     this.lastSay = now;
 
     // 轮换起点：上次那句排到最后，避免短时间内重复同一句
@@ -1878,16 +2469,15 @@ export class View {
     this.sfx(Math.random() < 0.5 ? 'cat_meow' : 'cat_happy');
   }
 
-  /** 重播气泡弹出动画 */
-  pulseBubble(cooling) {
+  /** 重播气泡弹出动画（停留 2.6 秒后自动收起） */
+  pulseBubble() {
     const el = this.el.catBubble;
     if (!el) return;
     el.classList.remove('show');
-    el.classList.toggle('cooling', !!cooling);
     void el.offsetWidth; // 强制回流，确保连续点击也能重播
     el.classList.add('show');
     clearTimeout(this.bubbleTimer);
-    this.bubbleTimer = setTimeout(() => el.classList.remove('show'), cooling ? 1400 : 2600);
+    this.bubbleTimer = setTimeout(() => el.classList.remove('show'), 2600);
   }
 
   spawnHeart() {
@@ -1906,8 +2496,6 @@ export class View {
     const fallbackPrice = cfg.price != null ? cfg.price : 100;
     return (cfg.skins || []).map((sk) => ({
       id: sk.id,
-      name: this.t(sk.nameKey),
-      desc: this.t(sk.descKey),
       price: sk.price != null ? sk.price : fallbackPrice,
       theme: sk.theme || null,
       themeName: sk.themeName || '',
@@ -2015,7 +2603,7 @@ export class View {
     this.applyTheme(id); // 买皮肤同时解锁并应用该主题
     this.sfx('purchase');
     this.commitCatStore();
-    this.toast(`${sk.name} ✓`);
+    this.toast(`${sk.themeName || this.t('shop.inUse')} ✓`);
     this.renderShop();
   }
 

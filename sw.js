@@ -1,6 +1,6 @@
 // 食合物语 Service Worker —— 全量离线缓存
 // 首次联网加载后，断网（飞行模式）也能完整运行。
-const CACHE = 'owk-v31';
+const CACHE = 'owk-v40';
 
 // v2.12：代码 / 配置类资源改「网络优先」。
 //

@@ -16,8 +16,10 @@
     "ingsH": 128,
     "gap": 8,
     "pad": 10,
-    "stationSlot": 82,
-    "storeSlot": 64,
+    "stationSlot": 72,
+    "storeSlot": 72,
+    "submitW": 66,
+    "trashW": 110,
     "ingCols": 7
   },
   "regions": [
@@ -45,37 +47,48 @@
       "id": "operation",
       "rect": [
         640,
-        64,
+        74,
         470,
-        340
+        440
       ],
-      "content": "食物台 / 饮品甜品台，上下堆叠（加冰开关已随 v1.4 移除，冰为基础材料）"
+      "content": "三个合成台竖排：食物台 → 甜品台 → 通用台；v2.18：操作列跨两行（grid-row: 1 / span 2），高度 = 首行 336 + gap 8 + 仓储行 96 = 440，三台纵向拉满（(440 − 2×gap) / 3 ≈ 141.3）；高度由 flex:1 1 0 + gap 8 均分，所以三台永远等高、同宽（= sizing.opW）、同一左边缘（640）。格位走 sizing.stationSlot（v2.19.2 起从 54 放大到 72，与仓库格位同尺寸；台高 141.3 扣掉边框/内边距/标题行/进度条后仍有 ~89，72 不裁切不溢出），多出来的纵向空间由 .st-body 的居中留白吸收。加冰开关已随 v1.4 移除，冰为基础材料"
     },
     {
       "id": "storageRow",
       "rect": [
         10,
-        412,
-        700,
+        418,
+        622,
         96
       ],
-      "content": "主仓储架（普通 5 / 困难 5 格，见 config.storage.capByDiff）"
+      "content": "主仓储架（普通 5 / 困难 5 格，见 config.storage.capByDiff）；v2.18 起仓储行只占左列（grid-column: 1），铺满到操作列左边缘（右边缘 = 操作列左边缘 − gap），不再收缩成 max-content；行内顺序：仓库（flex:1 吃掉剩余宽度）→ 一键提交 → 垃圾桶贴右端"
+    },
+    {
+      "id": "universalStation",
+      "rect": [
+        640,
+        373,
+        470,
+        141
+      ],
+      "content": "通用合成台（stations.universal）：v2.18 起与食物台 / 甜品台同构且同尺寸 —— 标题行（名称 + 说明 + 等级）/ 格位行（2 输入 + 箭头 + 1 输出）/ 进度条；格位与两台专业台统一走 sizing.stationSlot，整块宽 = sizing.opW，左边缘 = 操作列左边缘"
     },
     {
       "id": "bufferRow",
       "_deprecated": true,
+      "reusedBy": "universalStation",
       "rect": [
         720,
         412,
         390,
         96
       ],
-      "content": "【已下线】备料缓冲（原 6 格）——该机制已移除，主仓储为唯一仓库；字段仅作历史留档，不要据此实现 UI"
+      "content": "【已下线】备料缓冲（原 6 格）—— 该机制已移除，主仓储为唯一仓库；这块空间曾由通用合成台（regions.universalStation）接管，v2.18 起通用台已移入操作列，此处空出（露舞台底色），本字段仅作历史留档"
     },
     {
       "id": "trash",
-      "rect": "主仓储行右侧角",
-      "content": "垃圾桶（角标 Lv）+ 失败品免冷却提示"
+      "rect": "主仓储行内，贴仓储行最右端",
+      "content": "垃圾桶（角标 Lv）+ 失败品免冷却提示；v2.18 起垃圾桶贴仓储行最右端（宽 = sizing.trashW），一键提交按钮在仓库格位右端、垃圾桶左侧"
     },
     {
       "id": "ingredientArea",
@@ -120,7 +133,7 @@
       "hudNumber": 30,
       "hudLabel": 20,
       "button": 20,
-      "stationName": 24,
+      "stationName": 20,
       "ingredientName": 20,
       "ingredientCost": 16,
       "modalTitle": 32,

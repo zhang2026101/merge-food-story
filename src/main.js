@@ -8,25 +8,97 @@ const SAVE_KEY = 'owk.save.v1';
 const UNLOCK_KEY = 'owk.hard.unlocked';
 const CAT_KEY = 'owk.cats.v1'; // 局外：猫猫币 + 皮肤（跨局、跨周持久）
 const ACH_KEY = 'owk.ach.v1'; // 局外：成就解锁列表（跨局持久）
+const BANKRUPT_KEY = 'owk.lastBankrupt.v1'; // 上一局破产的周数：只在主页提示一次
 
 const DEFAULT_CATS = { coins: 0, owned: ['orange'], skin: 'orange' };
 
 const stage = document.getElementById('stage');
+const safeLayer = document.getElementById('safe');
 const rotateHint = document.getElementById('rotate-hint');
 
-// 设计基准：高度固定，宽度按视口宽高比伸缩（数值来自 layout.json 的 fit 段）
-let FIT = { height: 660, minAspect: 1120 / 660, maxAspect: 2.35 };
+// ---------------------------------------------------------------- 画布分档（v2.20.0）
+//
+// 设计基准：高度固定，宽度按视口宽高比伸缩（数值来自 layout.json 的 fit 段）。
+//
+// **为什么要分档**：原实现把 height=660 写死，手机横屏（如 844×390）只能把这 660
+// 等比压到 390，缩放系数 390/660 = 0.591 —— 全站元素都缩到设计值的 59%，
+// 实测 89.5% 的可点元素小于 44px（合成台格位 42.5、HUD 按钮高 23.6、气泡 × 14.2）。
+// 手机横屏是绝大多数玩家真正在用的姿态，所以给它一条「紧凑档」：
+// 逻辑高 600（缩放 390/600 = 0.650，+10%），同时用 style.css 里的
+// @media (max-height: 500px) 把关键控件放大。平板（1024×768）与桌面（1440×900）
+// 的视口高 ≥ 500，继续走基准档，scale 与改前完全一致（0.914 / 1.286）。
+const FIT_BASE = { height: 660, minAspect: 1120 / 660, maxAspect: 2.35 };
+const FIT_COMPACT = { height: 600, minAspect: 1120 / 600, maxAspect: 2.35 };
+/** 视口高低于此值视为「手机横屏」→ 紧凑档。与 style.css 的媒体查询阈值必须一致 */
+const COMPACT_MAX_HEIGHT = 500;
+
+// 【有意为之，勿当 bug 修】紧凑档的 minAspect 是 1120/600，而 1120 是布局能容下的最小逻辑宽
+// （HUD 一行 + 操作列 470 + 仓储行都是按这个宽度排的）。宽度不足的机型（如 667×375）会被
+// 这个下界卡住：scale = 667/1120 = 0.596，舞台高只有 357 < 375，于是上下各留 8.8px 黑边。
+// 这是「要么留黑边、要么压坏 HUD 与仓储行」的二选一，已定留黑边。
+
+let fitBase = { ...FIT_BASE };   // layout.json 提供的基准档（配置可覆盖）
+let FIT = { ...FIT_BASE };       // 当前**生效**的档位（按视口高在基准 / 紧凑之间切换）
 let stageW = 1120;
+let stageScale = 1;
+let stageCompact = false;
+
+/**
+ * 按当前视口高选择档位。只算「该用哪一档」，不改 DOM —— 真正的尺寸写入在 fitStage()。
+ * 同时把档位写到 <html data-fit="compact|base">，便于自动化测试与排查直读。
+ * @returns {boolean} 是否处于紧凑档
+ */
+function pickFit() {
+  // 用 window.innerHeight 而不是 #safe 的高度：档位是「设备姿态」的语义，
+  // 刘海内缩（几十 px）不应该把一台平板从基准档推到紧凑档。
+  const compact = window.innerHeight < COMPACT_MAX_HEIGHT;
+  FIT = compact
+    ? { height: FIT_COMPACT.height, minAspect: FIT_COMPACT.minAspect, maxAspect: fitBase.maxAspect }
+    : { height: fitBase.height, minAspect: fitBase.minAspect, maxAspect: fitBase.maxAspect };
+  stageCompact = compact;
+  document.documentElement.dataset.fit = compact ? 'compact' : 'base';
+  return compact;
+}
+
+/**
+ * 舞台可用的物理像素尺寸。
+ * **必须取安全区包裹层**（#safe）的实际尺寸：桌面 / 平板 env() 恒为 0，#safe 等于视口，
+ * 与改动前完全一致；手机横屏有刘海时 #safe 已经内缩，用 innerWidth/innerHeight 算出来的
+ * 可用区还是满屏，内缩就白做了（游戏区会被刘海压住）。
+ * @returns {{vw: number, vh: number}}
+ */
+function stageViewport() {
+  const w = safeLayer ? safeLayer.clientWidth : 0;
+  const h = safeLayer ? safeLayer.clientHeight : 0;
+  return {
+    vw: Math.max(1, w || window.innerWidth),
+    vh: Math.max(1, h || window.innerHeight),
+  };
+}
 
 function fitStage() {
-  const vw = Math.max(1, window.innerWidth);
-  const vh = Math.max(1, window.innerHeight);
+  const { vw, vh } = stageViewport();
+  pickFit();
   const aspect = Math.min(Math.max(vw / vh, FIT.minAspect), FIT.maxAspect);
   stageW = Math.round(FIT.height * aspect);
   const scale = Math.min(vw / stageW, vh / FIT.height);
   stage.style.width = stageW + 'px';
   stage.style.height = FIT.height + 'px';
   stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
+  stageScale = scale;
+}
+
+/** 当前画布档位的只读快照（自动化测试 / 排查用） */
+function fitInfo() {
+  return {
+    compact: stageCompact,
+    height: FIT.height,
+    minAspect: FIT.minAspect,
+    maxAspect: FIT.maxAspect,
+    stageW,
+    scale: stageScale,
+    viewport: stageViewport(),
+  };
 }
 
 function isPortrait() {
@@ -121,14 +193,22 @@ function exportSaveCode() {
 }
 
 /**
- * 把存档码写回本地。
- * 只接受「品牌前缀 + 可解析 JSON + 每个值本身仍是合法 JSON」的输入，
- * 免得把一段乱码写进 localStorage 反而把存档弄坏。
+ * 把玩家粘贴进来的文本洗成纯码。
+ * 真实场景里从聊天软件 / 备忘录复制，常带上换行、全角空格、零宽字符，
+ * 直接 startsWith('OWK1.') 会误判成「码坏了」。base64 本身不含空白，去掉是安全的。
  */
-function importSaveCode(code) {
-  const raw = String(code == null ? '' : code).trim();
+function cleanSaveCode(code) {
+  return String(code == null ? '' : code).replace(/[\s\u200b-\u200d\ufeff]/g, '');
+}
+
+/**
+ * 只解析、不写入。给导入弹层做实时校验与预览用（写盘要走 importSaveCode）。
+ * 只接受「品牌前缀 + 可解析 JSON + 每个值本身仍是合法 JSON」的输入。
+ */
+function decodeSaveCode(code) {
+  const raw = cleanSaveCode(code);
   if (!raw) return { ok: false, reason: 'empty' };
-  if (!raw.startsWith(SAVE_CODE_PREFIX)) return { ok: false, reason: 'badCode' };
+  if (!raw.startsWith(SAVE_CODE_PREFIX)) return { ok: false, reason: 'badPrefix' };
   let payload;
   try { payload = JSON.parse(b64decode(raw.slice(SAVE_CODE_PREFIX.length))); } catch (e) {
     return { ok: false, reason: 'badCode' };
@@ -137,16 +217,30 @@ function importSaveCode(code) {
     return { ok: false, reason: 'badCode' };
   }
   // 先全部校验，再统一写入 —— 半途失败会留下「一半新一半旧」的坏状态
-  const pending = [];
+  const entries = [];
   for (const k of SAVE_KEYS) {
     const v = payload.data[k];
     if (typeof v !== 'string') continue;
     try { JSON.parse(v); } catch (e) { return { ok: false, reason: 'badCode' }; }
-    pending.push([k, v]);
+    entries.push([k, v]);
   }
-  if (!pending.length) return { ok: false, reason: 'badCode' };
+  if (!entries.length) return { ok: false, reason: 'badCode' };
+  return { ok: true, entries, at: typeof payload.at === 'string' ? payload.at : '' };
+}
+
+/** 给 UI 的预览结果：解析出「这份码里有什么」，不写盘 */
+function inspectSaveCode(code) {
+  const r = decodeSaveCode(code);
+  if (!r.ok) return r;
+  return { ok: true, keys: r.entries.map((e) => e[0]), at: r.at };
+}
+
+/** 把存档码写回本地。校验全部通过才写，避免「一半新一半旧」。 */
+function importSaveCode(code) {
+  const r = decodeSaveCode(code);
+  if (!r.ok) return r;
   let n = 0;
-  for (const [k, v] of pending) {
+  for (const [k, v] of r.entries) {
     try { localStorage.setItem(k, v); n++; } catch (e) { /* 隐私模式忽略 */ }
   }
   return { ok: true, count: n };
@@ -175,10 +269,11 @@ async function boot() {
   }
 
   const fit = (ctx.layout && ctx.layout.fit) || {};
-  FIT = {
-    height: fit.height || 660,
-    minAspect: fit.minAspect || 1120 / 660,
-    maxAspect: fit.maxAspect || 2.35,
+  // layout.json 只提供**基准档**；紧凑档的高度 / 宽高比是设备姿态决定的常量（见文件头）
+  fitBase = {
+    height: fit.height || FIT_BASE.height,
+    minAspect: fit.minAspect || FIT_BASE.minAspect,
+    maxAspect: fit.maxAspect || FIT_BASE.maxAspect,
   };
   fitStage();
 
@@ -194,6 +289,9 @@ async function boot() {
 
   const view = new View(ctx, game, stage);
   view.mount();
+  // view.applyLayout() 会把 layout.json 的 fit.height（660）写回 stage.style.height，
+  // 紧凑档下必须再按「当前生效档位」覆盖一次，否则手机会被撑回 660。
+  fitStage();
   gameRef = game;
   viewRef = view;
   setTimeout(updateOrientation, 60);
@@ -250,32 +348,54 @@ async function boot() {
    * - 本局尚未合并的部分随 snapshot 一起存盘，读档时原样恢复，等这一局真正结束时再合并；
    * - 于是引擎侧恒有「tot（已结束的局）+ c（本局）」的口径，`ach_orders_100` / `ach_revenue_2000` /
    *   `ach_vip_10` 这类跨局累计成就在多局之间终于可达（M2）。
+   * - `catCoins`（累计猫币，`ach_cat_30` 的判据）同样走这条路径，但来源是 `s.catEarned`
+   *   而不是 `s.ach`（见 achCountersNow）——此前它从来没被累加过，导致该成就永不可达。
    */
   const achFlushed = new WeakMap();
+  /**
+   * 本局计数器的「当前值」快照
+   *
+   * 绝大多数计数器直接住在 `s.ach` 上，但**本局累计猫猫币**是引擎发币时写的
+   * `s.catEarned`（打烊 / 周结 / 周结金币奖励三处），并不在 `s.ach` 对象上。
+   * 因此这里在快照时把它映射成 `catCoins` 字段，让它和其它计数器走同一套
+   * 「当前值 − 已合并值 = 增量」的幂等合并逻辑（见下）。
+   * @returns {object|null} 没有进行中的对局时返回 null
+   */
+  const achCountersNow = () => {
+    const s = game.s;
+    const a = s && s.ach;
+    if (!a) return null;
+    return { ...a, catCoins: Math.max(0, s.catEarned || 0) };
+  };
   const flushAchCounters = () => {
     const a = game.s && game.s.ach;
-    if (!a) return false;
-    const prev = achFlushed.get(a) || { orders: 0, revenue: 0, vip: 0, trash: 0, bigOrders: 0, deliveries: 0, crossDay: 0, maxStorage: 0 };
+    const cur = achCountersNow();
+    if (!a || !cur) return false;
+    // catCoins 必须出现在 prev 里：否则每次 flush 都会把「本局累计猫币」整额再加一遍
+    const prev = achFlushed.get(a) || {
+      orders: 0, revenue: 0, vip: 0, trash: 0, bigOrders: 0,
+      deliveries: 0, crossDay: 0, maxStorage: 0, catCoins: 0,
+    };
     const counters = ach.counters;
-    const sumKeys = ['orders', 'revenue', 'vip', 'trash', 'bigOrders', 'deliveries', 'crossDay'];
+    const sumKeys = ['orders', 'revenue', 'vip', 'trash', 'bigOrders', 'deliveries', 'crossDay', 'catCoins'];
     let changed = false;
     for (const k of sumKeys) {
-      const delta = (a[k] || 0) - (prev[k] || 0);
+      const delta = (cur[k] || 0) - (prev[k] || 0);
       if (delta > 0) {
         counters[k] = (counters[k] || 0) + delta;
         changed = true;
       }
     }
     // maxStorage 是「峰值」而非可累加的增量，取全局最大值
-    if ((a.maxStorage || 0) > (counters.maxStorage || 0)) {
-      counters.maxStorage = a.maxStorage;
+    if ((cur.maxStorage || 0) > (counters.maxStorage || 0)) {
+      counters.maxStorage = cur.maxStorage;
       changed = true;
     }
     achFlushed.set(a, {
-      orders: a.orders || 0, revenue: a.revenue || 0, vip: a.vip || 0,
-      trash: a.trash || 0, bigOrders: a.bigOrders || 0,
-      deliveries: a.deliveries || 0, crossDay: a.crossDay || 0,
-      maxStorage: a.maxStorage || 0,
+      orders: cur.orders || 0, revenue: cur.revenue || 0, vip: cur.vip || 0,
+      trash: cur.trash || 0, bigOrders: cur.bigOrders || 0,
+      deliveries: cur.deliveries || 0, crossDay: cur.crossDay || 0,
+      maxStorage: cur.maxStorage || 0, catCoins: cur.catCoins || 0,
     });
     if (changed) writeJSON(ACH_KEY, ach);
     return changed;
@@ -292,18 +412,37 @@ async function boot() {
   if (!cats.skin) cats.skin = 'orange';
   view.applyTheme(cats.skin);
 
+  // 导入存档码后要 location.reload()，而 reload 会触发 beforeunload → persist()，
+  // 用内存里的旧状态把刚导入的键覆盖回去（实测：皮肤生效、困难解锁被回滚成 false）。
+  // 导入成功时调 suppressPersist() 关掉这条写入路径。
+  let persistSuppressed = false;
   const persist = () => {
+    if (persistSuppressed) return;
+    // 终局不落盘：破产那局已经结束，写进存档只会让下次「继续上次」回到一个负金币的周
+    if (game.s && game.s.phase === 'bankrupt') return;
     const snap = game.snapshot();
     if (snap) writeJSON(SAVE_KEY, snap);
     writeJSON(UNLOCK_KEY, game.hardUnlocked);
   };
   view.onSave = persist;
 
+  /**
+   * 主页渲染：顺便把「上一局破产」的提示读出来（只显示一次，显示后立刻清掉），
+   * 否则玩家看到金币/设备被清零会以为数据丢了。
+   */
+  const showMenuWithNote = () => {
+    const note = readJSON(BANKRUPT_KEY, null);
+    view.showMenu(!!readJSON(SAVE_KEY, null), game.hardUnlocked, note && note.week ? note.week : 0);
+    if (note) { try { localStorage.removeItem(BANKRUPT_KEY); } catch (e) { /* 隐私模式忽略 */ } }
+  };
+
   const startScreen = () => {
     view.showGame();
     view.render();
     persist();
     if (game.s.tutorial.active) view.openRecipe();
+    // 开门招呼只在非教学局弹：教学局会立刻弹配方书，toast 会被弹层盖住
+    else view.toast(ctx.t('toast.started'), 2000);
   };
 
   view.onStart = (mode) => {
@@ -340,7 +479,7 @@ async function boot() {
 
   view.onQuit = () => {
     persist();
-    view.showMenu(!!readJSON(SAVE_KEY, null), game.hardUnlocked);
+    showMenuWithNote();
     view.bindMenu = null;
   };
 
@@ -354,7 +493,11 @@ async function boot() {
   // M7：引擎已发但此前全代码库无订阅的事件，补上接线
   game.on('craftDone', () => audio.play('step_done')); // 合成完成：最高频的正反馈
   game.on('upgraded', () => audio.play('purchase')); // 设备升级成功
-  game.on('trash', () => audio.play('ingredient_wrong')); // 丢弃（复用现有 preset，不新增音频）
+  game.on('trash', (d) => {
+    audio.play('ingredient_wrong'); // 丢弃（复用现有 preset，不新增音频）
+    // 垃圾桶升级的返还：丢一件返成本的一部分，钱少但看得见，给玩家一个正反馈
+    if (d && d.refund > 0) view.toast(`+${d.refund}`, 900);
+  });
   game.on('dayTimeUp', () => audio.play('order_expired')); // 收摊：沿用"结束"听感，无专用收摊音
   // game.on('combine', ...) 有意不订阅：它只表示「配方匹配成功、开始读条」，
   // 与 craftDone 相隔一个读条时间，接音效会和键盘声叠成噪音；统计也不需要（本局数据都能从 state 取）。
@@ -409,7 +552,10 @@ async function boot() {
     view.showWeekEnd(w);
   });
   game.on('bankrupt', (w) => {
-    persist();
+    // 本局结束：先把存档删掉，再弹清算面板。
+    // 回主页后「继续上次」应当是灰的，且下一次开局由 newRun 把金币/设备全部归零。
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 隐私模式忽略 */ }
+    writeJSON(BANKRUPT_KEY, { week: w.week || 1 });
     view.showBankrupt(w);
   });
 
@@ -431,6 +577,12 @@ async function boot() {
   let errStreak = 0; // 连续异常帧数
   const ERR_LIMIT = 60; // 连续 60 帧异常才熔断，避免偶发错误直接停服
   let errFatal = false;
+  // 局中定时落盘（v2.20.0）：原来只有「开局 / 日结 / 周结 / 破产 / 回主页 / 关页」六个点写盘，
+  // 局中完全不写。玩家在营业中直接划掉 App（WebView 被系统回收）就会丢掉整天的进度。
+  // 复用现成的帧循环计时，不新开 setInterval（避免多一条需要清理的定时器链路）；
+  // 10 秒是上限，再密就是 localStorage 写放大，反而拖慢手机。
+  const PERSIST_INTERVAL_MS = 10000;
+  let lastPersist = performance.now();
   function loop(now) {
     let dt = now - last;
     last = now;
@@ -439,6 +591,13 @@ async function boot() {
       game.tick(dt);
       acc += dt;
       if (acc > 40) { view.frame(); acc = 0; }
+      if (now - lastPersist >= PERSIST_INTERVAL_MS) {
+        lastPersist = now;
+        // 只在「真正在营业」时落盘：暂停 / 结算 / 回主页都不写（状态没变，没必要写放大）
+        if (game.s && game.s.phase === 'day' && !game.s.paused && !view.el.game.classList.contains('hidden')) {
+          persist();
+        }
+      }
       errStreak = 0;
     } catch (err) {
       // 单帧异常不得终止 requestAnimationFrame 链（否则整局静止且不再渲染），
@@ -461,16 +620,75 @@ async function boot() {
 
   // ---------------------------------------------------------- 页面隐藏自动暂停
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.s && game.s.phase === 'day' && !game.s.paused && !view.el.game.classList.contains('hidden')) {
+    if (!document.hidden) return;
+    // v2.20.0：切后台 / 被系统回收之前先落盘，再暂停。
+    // 原来只暂停不保存 —— 手机息屏后回来看到的是暂停面板，但如果进程被回收，
+    // 这一整天的营业进度就没了（局中本来完全不写盘）。
+    persist();
+    if (game.s && game.s.phase === 'day' && !game.s.paused && !view.el.game.classList.contains('hidden')) {
       view.togglePause(); // 切走即冻结，回来时看到暂停面板
     }
   });
   window.addEventListener('beforeunload', persist);
+  // pagehide 覆盖「进后台被直接回收」这条路径（iOS 上 beforeunload 常不触发）
+  window.addEventListener('pagehide', persist);
 
-  view.showMenu(!!save, game.hardUnlocked);
+  // ---------------------------------------------------------- 返回键（v2.20.0）
+  //
+  // 问题：APK / WebView / 独立 PWA 里，系统返回键默认直接把 App 关掉。
+  // 局中按一下就退回桌面，玩家会以为「进度全丢了」（其实刚才那 10s 内可能还没落盘）。
+  //
+  // 做法：先用 pushState 压一条历史基线 —— 没有基线，popstate 根本不会派发。
+  //   · 局中按返回 → 重新压基线（连按两次也不会退出）+ persist() + 二次确认；
+  //                 确认回主页，取消留在局中。
+  //   · 主页 / 结算 / 破产按返回 → 不拦截（消费掉基线后不再续压，下一次返回就真退出）。
+  const BACK_STATE = { owk: 'guard' };
+  let backArmed = false;
+  const armBackGuard = () => {
+    if (backArmed) return;
+    try {
+      history.pushState(BACK_STATE, '');
+      backArmed = true;
+    } catch (e) { /* 受限环境（部分 WebView / 隐私模式）忽略 */ }
+  };
+
+  const onBack = () => {
+    const inGame = !!(game.s && game.s.phase === 'day' && !view.el.game.classList.contains('hidden'));
+    if (!inGame) return; // 主页 / 结算 / 破产：交给系统正常退出
+    armBackGuard();      // 续压基线，避免「确认框还开着」时再按一次就退出
+    persist();           // 退出前保命一次（不依赖 10s 定时器）
+    view.confirmBack({
+      title: ctx.t('back.title'),
+      body: ctx.t('back.body'),
+      okLabel: ctx.t('back.ok'),
+      cancelLabel: ctx.t('back.cancel'),
+      onConfirm: () => { if (view.onQuit) view.onQuit(); },
+    });
+  };
+
+  window.addEventListener('popstate', () => {
+    backArmed = false; // 刚消费掉一条基线
+    onBack();
+  });
+  armBackGuard();
+
+  // Capacitor 打包接入点（v2.20.0 预留，打 APK 时按下面两行接即可，逻辑完全复用）：
+  //   import { App } from '@capacitor/app';
+  //   App.addListener('backButton', () => window.__OWK_BACK__());
+  // 原生返回键由 Capacitor 截获，**不会**派发 popstate，必须转发到这个入口；
+  // 否则 WebView 里按返回会直接 finish 掉 Activity。
+  window.__OWK_BACK__ = onBack;
+
+  /** 导入存档码后调用：关掉 persist，避免 reload 前的 beforeunload 把导入结果冲掉 */
+  const suppressPersist = () => {
+    persistSuppressed = true;
+    window.removeEventListener('beforeunload', persist);
+  };
+
+  showMenuWithNote();
 
   // 便于自动化测试
-  window.__OWK__ = { ctx, game, view, exportSaveCode, importSaveCode };
+  window.__OWK__ = { ctx, game, view, exportSaveCode, importSaveCode, inspectSaveCode, suppressPersist, fit: fitInfo };
 }
 
 boot();

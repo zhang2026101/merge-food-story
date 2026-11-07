@@ -6,7 +6,7 @@
       "thisCost": "本次合成投料时立即从 coins 扣除的金币（中间产物已沉没成本不重复扣）",
       "chainCost": "该产物从所有叶食材起算的总成本，用于核算净收益"
     },
-    "note": "v1.4：茶升级为商品；冰淇淋改为牛奶+糖浆合成；移除加冰开关（冰是基础材料）"
+    "note": "v1.4：茶升级为商品；冰淇淋改为牛奶+糖浆合成；移除加冰开关（冰是基础材料）｜v2.17：新增 cheeseFries / latte / milkTea / hashBrown 四道菜（未新增原料，输入对与既有 14 条不重复）"
   },
   "recipes": [
     {
@@ -203,6 +203,62 @@
       "chainCost": 3,
       "net": 3,
       "note": "本次仅扣冰1（tea已沉没2）"
+    },
+    {
+      "id": "cheeseFries",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "fries",
+        "cheese"
+      ],
+      "price": 9,
+      "thisCost": 2,
+      "chainCost": 4,
+      "net": 5,
+      "note": "本次仅扣芝士2（薯条已沉没2：土豆1×2）；食物台/通用台都能做"
+    },
+    {
+      "id": "latte",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "coffee",
+        "milk"
+      ],
+      "price": 9,
+      "thisCost": 2,
+      "chainCost": 5,
+      "net": 4,
+      "note": "本次仅扣牛奶2（咖啡已沉没3：咖啡豆2+水1）；甜品台/通用台都能做"
+    },
+    {
+      "id": "milkTea",
+      "type": "drink",
+      "station": "drink",
+      "inputs": [
+        "tea",
+        "milk"
+      ],
+      "price": 8,
+      "thisCost": 2,
+      "chainCost": 4,
+      "net": 4,
+      "note": "本次仅扣牛奶2（茶已沉没2：茶包1+水1）；甜品台/通用台都能做"
+    },
+    {
+      "id": "hashBrown",
+      "type": "food",
+      "station": "food",
+      "inputs": [
+        "potato",
+        "ketchup"
+      ],
+      "price": 6,
+      "thisCost": 2,
+      "chainCost": 2,
+      "net": 4,
+      "note": "两份叶食材（土豆1+番茄酱1）本次共扣2；食物台/通用台都能做"
     }
   ],
   "equivalenceClasses": [

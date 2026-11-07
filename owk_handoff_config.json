@@ -13,12 +13,31 @@
     "dayLoop": {
       "dayDurationMs": 90000,
       "note": "顾客到店节奏由单日时长推导，倒计时归零即打烊；教学期不计时",
+      "poolNote": "当日菜单的候选池（v2.17.1 起食物池也从这里读，engine.buildMenu 里只保留旧数组作兜底）。主菜 burger / signatureBurger 由模式决定，池里的同名项会被 filter 掉，不会重复出现。",
+      "foodPool": [
+        "fries",
+        "salad",
+        "pizza",
+        "burger",
+        "hashBrown",
+        "cheeseFries"
+      ],
+      "foodPoolHard": [
+        "fries",
+        "salad",
+        "pizza",
+        "signatureBurger",
+        "hashBrown",
+        "cheeseFries"
+      ],
       "drinkPool": [
         "coffee",
         "tea",
         "iceCream",
         "milkshake",
-        "icedTea"
+        "icedTea",
+        "latte",
+        "milkTea"
       ]
     },
     "economyNote": "体检后调整（v1.9）：房租 150/240/330（原 150/220/280，后期压力不足）；VIP 耐心 0.6→0.7（两份同种 + 25 秒过紧）；回收 30%→25%（减少囤货套利）。时间系统（90s/日、10s 间隔、42s 耐心、1200ms 单步）实测节奏舒适，保持不变。"
@@ -28,23 +47,24 @@
     "daysPerWeek": 7,
     "daysPerWeekNote": "每周营业天数（唯一权威）：引擎 nextDay() 的日上限读此值，代码里不再写死 7",
     "rentByWeek": {
-      "1": 150,
-      "2": 240,
-      "3+": 330
+      "1": 400,
+      "2": 800,
+      "3+": 1300
     },
+    "customersPerWeekGrowth": 2,
+    "customersPerDayCap": 14,
+    "customersGrowthNote": "第 2 周起，每日顾客数 = 基准(已受天气 spawnMul 影响) + (周数-1) × 本值，再夹到 customersPerDayCap；0 = 关闭增长",
     "rentMulByDiff": {
       "normal": 1,
-      "hard": 1
+      "hard": 1.2
     },
     "recycleSellableRateNormal": 0.25,
     "recycleIntermediateRateNormal": 0,
     "bankrupt": {
       "trigger": "coins < 0 after weekly rent",
-      "behavior": "softLand",
-      "retryOption": "重开本周",
-      "resetCoinsTo": "进入该周时的实际金币（上周周末结余 - 上周房租）",
-      "resetDevices": false,
-      "resetProgress": true
+      "behavior": "endRun",
+      "retryOption": "无（旧的「重开本周」已在 v2.14 移除）",
+      "onEnd": "弹清算面板（房租 / 缺口 / 本周成交）→ 回主页；下一次开局金币与设备等级全部归零，猫猫币与成就保留"
     }
   },
   "ingredients": {
@@ -73,6 +93,20 @@
       "inputSlots": 2,
       "outputSlots": 1,
       "parallel": true
+    },
+    "universal": {
+      "inputSlots": 2,
+      "outputSlots": 1,
+      "parallel": true,
+      "timeFactor": [
+        1.5,
+        1.45,
+        1.4,
+        1.35
+      ],
+      "acceptsAll": true,
+      "forbidsIntermediate": false,
+      "note": "通用合成台：acceptsAll = 任何叶食材/成品都能投（不按配方归属拦料）；timeFactor = 单次读条系数，**按灶台等级取值**（1.5/1.45/1.4/1.35）——越升级通用台越接近专用台，「花钱让通用台变好用」才有获得感；v2.18 起 forbidsIntermediate 关闭，通用台可制作全部内容（含菜肉饼/饼底这类半成品），半成品读条按 stoveMs × intermediateStepFactor(0.65) × timeFactor(当前等级) 乘算，仍比专用台慢。开关保留：将来若要重新限制，改回 true 即可。"
     }
   },
   "matching": {
@@ -83,7 +117,7 @@
     "intermediateStepFactor": 0.65,
     "earlyCloseDebounceMs": 500,
     "earlyCloseDebounceNote": "全部顾客处理完后需持续该时长才提前打烊（防抖，避免最后一单刚结束就瞬间打烊）",
-    "note": "中间产物(菜肉饼/饼底/奶底/茶)读条 = 炉灶当前等级 stepTime × 0.65",
+    "note": "中间产物(菜肉饼/饼底/奶底/茶)读条 = 炉灶当前等级 stepTime × 0.65；通用台的系数在 stations.universal.timeFactor（1.5）",
     "failedProduct": {
       "occupiesOutputSlot": true,
       "sellable": false,
@@ -103,21 +137,25 @@
     "levels": [
       {
         "lv": 1,
-        "cooldownMs": 1500
+        "refundRate": 0
       },
       {
         "lv": 2,
-        "cooldownMs": 1000,
+        "refundRate": 0.2,
         "upgradeCost": 40
       },
       {
         "lv": 3,
-        "cooldownMs": 400,
+        "refundRate": 0.4,
         "upgradeCost": 80
+      },
+      {
+        "lv": 4,
+        "refundRate": 0.6,
+        "upgradeCost": 150
       }
     ],
-    "failedBypass": true,
-    "note": "丢弃失败品免冷却；自愿丢弃正常物品受冷却约束"
+    "note": "丢弃无冷却。垃圾桶升级只提高「按物品成本返还」的比例：Lv1 0% / Lv2 20% / Lv3 40% / Lv4 60%。失败品成本为 0，不返还。"
   },
   "devices": {
     "stove": {
@@ -130,9 +168,9 @@
       "effect": "stepTime(合成读条 ms)",
       "values": [
         1200,
-        1020,
-        870,
-        740
+        960,
+        768,
+        614
       ]
     },
     "counter": {
@@ -165,11 +203,6 @@
         1.1,
         1.15
       ]
-    },
-    "refund": {
-      "rate": 0.5,
-      "basis": "cumulative",
-      "note": "升级到新等级时，按该设备截至上一等级累计已投入升级费的 50% 返还；仅针对升级费，叶成本不返；Lv1→Lv2 返还 0（首级无返还）"
     },
     "upgradeFlow": {
       "entry": "操作区右上角「升级」按钮",
@@ -204,7 +237,7 @@
       "patienceMul": 1,
       "rentMul": 1,
       "pace": {
-        "customersPerDay": 9,
+        "customersPerDay": 11,
         "spawnIntervalMs": 24000,
         "maxQueue": 3,
         "dayDurationMs": 90000,
@@ -222,7 +255,7 @@
       "patienceMul": 0.85,
       "rentMul": 1,
       "pace": {
-        "customersPerDay": 11,
+        "customersPerDay": 13,
         "spawnIntervalMs": 18000,
         "maxQueue": 4,
         "dayDurationMs": 90000,
@@ -316,9 +349,7 @@
     "skins": [
       {
         "id": "orange",
-        "nameKey": "skin.orange",
         "price": 0,
-        "descKey": "skin.orange.desc",
         "theme": {
           "bg": "#FDF6E9",
           "paper2": "#F7EEDA",
@@ -335,9 +366,7 @@
       },
       {
         "id": "cow",
-        "nameKey": "skin.cow",
         "price": 100,
-        "descKey": "skin.cow.desc",
         "theme": {
           "bg": "#F3F3F1",
           "paper2": "#E9E9E5",
@@ -354,9 +383,7 @@
       },
       {
         "id": "xiaoguai",
-        "nameKey": "skin.xiaoguai",
         "price": 100,
-        "descKey": "skin.xiaoguai.desc",
         "theme": {
           "bg": "#F1F4F8",
           "paper2": "#E6ECF3",
@@ -373,9 +400,7 @@
       },
       {
         "id": "black",
-        "nameKey": "skin.black",
         "price": 100,
-        "descKey": "skin.black.desc",
         "theme": {
           "bg": "#2B2D42",
           "paper2": "#212338",
@@ -392,9 +417,7 @@
       },
       {
         "id": "calico",
-        "nameKey": "skin.calico",
         "price": 100,
-        "descKey": "skin.calico.desc",
         "theme": {
           "bg": "#FDF1E4",
           "paper2": "#F6E3CE",
@@ -411,9 +434,7 @@
       },
       {
         "id": "blue",
-        "nameKey": "skin.blue",
         "price": 100,
-        "descKey": "skin.blue.desc",
         "theme": {
           "bg": "#EAF5FB",
           "paper2": "#D9EBF5",
@@ -430,9 +451,7 @@
       },
       {
         "id": "siamese",
-        "nameKey": "skin.siamese",
         "price": 150,
-        "descKey": "skin.siamese.desc",
         "theme": {
           "bg": "#FBF5E9",
           "paper2": "#F2E7D2",
@@ -449,9 +468,7 @@
       },
       {
         "id": "lucky",
-        "nameKey": "skin.lucky",
         "price": 200,
-        "descKey": "skin.lucky.desc",
         "theme": {
           "bg": "#FFF3E4",
           "paper2": "#F8E2CB",
@@ -583,7 +600,9 @@
     ],
     "hotDrinks": [
       "coffee",
-      "tea"
+      "tea",
+      "latte",
+      "milkTea"
     ],
     "orderWeights": {}
   },
@@ -593,8 +612,6 @@
     "note": "可选增益订单：手机提前 10 秒预警所需物品 → 倒计时结束骑手到店 → 玩家交付后骑手离店配送 → 10 秒后送达并按正常订单的双倍结算金币；日结时未完成订单并入当天总结算（已交付的按送达口径结算）。",
     "previewMs": 10000,
     "incomePercent": 150,
-    "catCoinPerOrder": 1,
-    "catCoinDayCap": 2,
     "rainRiderWaitBonusMs": 2000,
     "tipMaxPercent": 30,
     "modes": {
@@ -922,6 +939,39 @@
         "minReward": 50,
         "maxReward": 60
       }
+    },
+    "thresholds": {
+      "note": "成就解锁阈值（唯一权威）。key 是语义名，不是成就 cond 名；engine.js 的 pass() 一律用 this._achN(key, fallback) 读取，fallback 与这里的值保持同值，配置缺失时行为不变。改动此处即改难度，不用碰代码。",
+      "daySurvive": 5,
+      "weekSurvive": 3,
+      "weekSurvive5": 5,
+      "dayEarned": 100,
+      "totalOrders": 100,
+      "firstServe": 1,
+      "totalRevenue": 2000,
+      "totalRevenueBig": 5000,
+      "rentRichCoins": 300,
+      "coinsRich": 500,
+      "vipCount": 10,
+      "bothBusyMs": 10000,
+      "speedWindowMs": 10000,
+      "speedCount": 3,
+      "storagePeak": 4,
+      "trashAllowance": 0,
+      "bigOrderCount": 3,
+      "rainyDayEarned": 120,
+      "heatDayLostMax": 1,
+      "fogDayServed": 8,
+      "heatDayServed": 8,
+      "snowDayEarned": 150,
+      "dayOrders": 12,
+      "deliveriesTotal": 10,
+      "deliveryFirst": 1,
+      "crossDayCount": 1,
+      "weatherVariety": 3,
+      "catCoins": 30,
+      "skinCount": 3,
+      "themeCount": 1
     }
   },
   "themes": {

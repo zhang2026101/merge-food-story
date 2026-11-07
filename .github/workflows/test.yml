@@ -1,0 +1,28 @@
+# 发布版零依赖回归
+#
+# 为什么只跑 npm test：
+#   tools/test-engine.mjs 与 tools/verify-fixes.mjs 是纯 Node（零依赖、不碰 DOM、不联网），
+#   在干净的 CI 容器里一定能跑；其余浏览器巡检脚本硬编码了本机 playwright 路径，不随仓库发布。
+#
+# 顺带的好处：断言条数在这里有唯一权威出处 —— 看 job 日志末尾的「结果：N 通过」，
+# 不用再猜文档里的 118 / 421 / 1282 哪个是对的。
+name: test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: 引擎回归 + 修复回归（npm test）
+        run: npm test

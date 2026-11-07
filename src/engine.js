@@ -47,7 +47,7 @@ export class Game {
   get stoveMs() { return this.cfg.devices.stove.values[this.s.devices.stove - 1]; }
   get counterMul() { return this.cfg.devices.counter.values[this.s.devices.counter - 1]; }
   get signMul() { return this.cfg.devices.sign.values[this.s.devices.sign - 1]; }
-  get trashCdMs() { return this.cfg.trash.levels[this.s.devices.trash - 1].cooldownMs; }
+  get trashRefundRate() { return this.cfg.trash.levels[this.s.devices.trash - 1].refundRate || 0; }
   get storageCap() { return this.cfg.storage.capByDiff[this.s.mode]; }
   get maxQueue() { return this.cfg.difficulty[this.s.mode].pace.maxQueue; }
   get pace() { return this.cfg.difficulty[this.s.mode].pace; }
@@ -68,6 +68,12 @@ export class Game {
   kindOf(id) { return this.ctx.kindOf(id); }
   priceOf(id) { return this.ctx.priceOf(id); }
   leafCost(id) { return this.ctx.leafCost(id); }
+  /** 物品成本（含链条）：食材按单价、半成品/成品按 chainCost。丢弃返还按这个算。 */
+  itemCost(id) {
+    const rec = this.byId.get(id);
+    if (rec && typeof rec.chainCost === 'number') return rec.chainCost;
+    return this.leafCost(id);
+  }
 
   mkItem(key) { return { uid: 'i' + (this._uid++), key }; }
 
@@ -83,6 +89,17 @@ export class Game {
 
   blankStation(key) {
     return { inputs: this.blankInputs(key), output: null, busy: false, progress: 0, duration: 0, pendingId: null };
+  }
+
+  /**
+   * 本局全部工位（食物台 / 甜品台 / 通用台 …）
+   * 键集合一律从 config.stations 推导，新增工位只需加配置，不用改 newRun。
+   */
+  blankStations() {
+    const out = {};
+    const keys = new Set(['food', 'drink', ...Object.keys(this.cfg.stations || {})]);
+    for (const key of keys) out[key] = this.blankStation(key);
+    return out;
   }
 
   // ---------------------------------------------------------------- 存档取值的数值工具
@@ -149,10 +166,14 @@ export class Game {
       if (d.status === 'scheduled' && t >= d.phoneAt) {
         d.status = 'preview';
         this.emit('deliveryPreview', d); // 手机预警：提前提示所需物品并倒计时
+        // v2.19：状态变了必须让视图重绘，否则手机还停在「灭屏小点」上，
+        // 要等到下一次无关的 change（投料/顾客流失）才更新 —— 玩家看到的就是「倒计时根本没出现」。
+        this.emit('change');
       }
       if (d.status === 'preview' && t >= d.riderAt) {
         d.status = 'rider_arrived';
         this.emit('deliveryRiderArrived', d); // 倒计时结束，骑手到店
+        this.emit('change');
       }
       // 骑手取走 10 秒后配送完成并结算（按送达口径：双倍金币）
       if (d.status === 'picked_up' && d.deliveredAt && t >= d.deliveredAt) {
@@ -235,23 +256,16 @@ export class Game {
     s.weekStats.deliveryRevenue = (s.weekStats.deliveryRevenue || 0) + earned;
     d.earned = earned;
 
-    let cat = 0;
+    // 外卖不再发放猫猫币：猫猫币只来自「每日打烊 / 每周结算 / 金币奖励 / 成就」四条，
+    // 与主页「猫猫币怎么赚」弹层里给玩家看的说明保持同一口径 —— 说明里没写的，代码里就不发。
     if (!pending) {
-      const dc = this.cfg.delivery || {};
-      const cap = dc.catCoinDayCap != null ? dc.catCoinDayCap : 2;
-      if ((s.dayStats.deliveryCatCoins || 0) < cap) {
-        cat = dc.catCoinPerOrder || 1;
-        s.dayStats.deliveryCatCoins = (s.dayStats.deliveryCatCoins || 0) + cat;
-        s.catEarned += cat;
-        this.emit('catCoin', { amount: cat, reason: 'delivery' });
-      }
       // 成就埋点：送达口径的外卖单才计入「已完成外卖」（F5）
       this.bumpCounter('deliveries', 1);
       if (opts.crossDay) this.bumpCounter('crossDay', 1);
     }
-    this.emit('deliveryDone', { ...d, earned, cat, pending });
+    this.emit('deliveryDone', { ...d, earned, pending });
     this.emit('change');
-    return { earned, cat };
+    return { earned };
   }
 
   /**
@@ -315,6 +329,22 @@ export class Game {
   }
 
   /**
+   * 读一条成就阈值（`config.achievements.thresholds[key]`）
+   *
+   * 数值一律外置：成就解锁阈值住在 `owk_handoff_config.json` 的
+   * `achievements.thresholds` 里，代码只保留同名 fallback —— 配置缺失 / 被写坏时
+   * 行为与改动前完全一致（fallback 就是原先写死在 switch 里的那个数字）。
+   * @param {string} key 语义名（不是成就 cond 名）
+   * @param {number} fallback 配置缺失时的兜底值，必须与配置里的同值
+   * @returns {number}
+   */
+  _achN(key, fallback) {
+    const t = (this.cfg.achievements && this.cfg.achievements.thresholds) || {};
+    const v = t[key];
+    return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  }
+
+  /**
    * 结算时批量检查成就（不与 tick 耦合）
    * @param {'day'|'week'} when
    * @param {object} extra  跨局数据（累计订单/营业额/VIP/皮肤/主题），由启动器提供
@@ -332,57 +362,63 @@ export class Game {
     const unlocked = new Set(extra.unlocked || []);
 
     const bothBusyMs = s.ach.bothBusyMs;
-    // 最近 3 单的成交时间跨度 ≤ 10 秒（滚动窗口，serveTimes 只保留最近 8 条）
-    const speed3 = c.serveTimes.length >= 3
-      && (c.serveTimes[c.serveTimes.length - 1] - c.serveTimes[c.serveTimes.length - 3] <= 10000);
+    // 最近 speedCount 单的成交时间跨度 ≤ speedWindowMs（滚动窗口，serveTimes 只保留最近 8 条）
+    const speedCount = this._achN('speedCount', 3);
+    const speedWindowMs = this._achN('speedWindowMs', 10000);
+    const speed3 = c.serveTimes.length >= speedCount
+      && (c.serveTimes[c.serveTimes.length - 1] - c.serveTimes[c.serveTimes.length - speedCount] <= speedWindowMs);
 
+    // 阈值全部走 config.achievements.thresholds（见 _achN），fallback 保留原字面量
     const pass = (cond) => {
       switch (cond) {
         case 'daySurvived': return true;
         case 'paidRent': return when === 'week';
-        case 'day5': return s.day >= 5;
-        case 'weeks3': return s.week >= 3;
-        case 'weeks5': return s.week >= 5;
+        case 'day5': return s.day >= this._achN('daySurvive', 5);
+        case 'weeks3': return s.week >= this._achN('weekSurvive', 3);
+        case 'weeks5': return s.week >= this._achN('weekSurvive5', 5);
         case 'hardPaidRent': return s.mode === 'hard' && when === 'week';
-        case 'firstServe': return (tot.orders || 0) + c.orders >= 1;
-        case 'dayEarned100': return (st.earned + st.bonus) >= 100;
-        case 'totalOrders100': return (tot.orders || 0) + c.orders >= 100;
-        case 'totalRevenue2000': return (tot.revenue || 0) + c.revenue >= 2000;
-        case 'rentRich': return when === 'week' && s.coins >= 300;
-        case 'vip10': return (tot.vip || 0) + c.vip >= 10;
+        case 'firstServe': return (tot.orders || 0) + c.orders >= this._achN('firstServe', 1);
+        case 'dayEarned100': return (st.earned + st.bonus) >= this._achN('dayEarned', 100);
+        case 'totalOrders100': return (tot.orders || 0) + c.orders >= this._achN('totalOrders', 100);
+        case 'totalRevenue2000': return (tot.revenue || 0) + c.revenue >= this._achN('totalRevenue', 2000);
+        case 'rentRich': return when === 'week' && s.coins >= this._achN('rentRichCoins', 300);
+        case 'vip10': return (tot.vip || 0) + c.vip >= this._achN('vipCount', 10);
         case 'zeroWasteDay': return st.waste === 0 && st.lost === 0;
         case 'zeroWasteWeek': return when === 'week' && ws.waste === 0 && ws.lost === 0 && ws.discarded === 0;
-        case 'doublePot10s': return bothBusyMs >= 10000;
+        case 'doublePot10s': return bothBusyMs >= this._achN('bothBusyMs', 10000);
         case 'speed3': return speed3;
-        case 'storage4': return c.maxStorage >= 4 && s.storage.length === 0;
-        case 'noTrashWeek': return when === 'week' && c.trash === 0;
-        case 'bigOrder3': return c.bigOrders >= 3;
-        case 'rainDay120': return s.weather === 'rain' && (st.earned + st.bonus) >= 120;
-        case 'heatDayLost1': return s.weather === 'heat' && st.lost <= 1;
-        case 'fogDay8Orders': return s.weather === 'fog' && st.served >= 8;
-        case 'own3Skins': return (extra.ownedSkins || 0) >= 3;
-        case 'own1Theme': return (extra.ownedThemes || 0) >= 1;
+        case 'storage4': return c.maxStorage >= this._achN('storagePeak', 4) && s.storage.length === 0;
+        case 'noTrashWeek': return when === 'week' && c.trash <= this._achN('trashAllowance', 0);
+        case 'bigOrder3': return c.bigOrders >= this._achN('bigOrderCount', 3);
+        case 'rainDay120': return s.weather === 'rain' && (st.earned + st.bonus) >= this._achN('rainyDayEarned', 120);
+        case 'heatDayLost1': return s.weather === 'heat' && st.lost <= this._achN('heatDayLostMax', 1);
+        case 'fogDay8Orders': return s.weather === 'fog' && st.served >= this._achN('fogDayServed', 8);
+        case 'own3Skins': return (extra.ownedSkins || 0) >= this._achN('skinCount', 3);
+        case 'own1Theme': return (extra.ownedThemes || 0) >= this._achN('themeCount', 1);
         // ---- v2.8 新增 ----
         // 完成第一单外卖（送达口径才计数：pending 并入不算「完成」）
-        case 'deliveryFirst': return c.deliveries >= 1;
+        case 'deliveryFirst': return c.deliveries >= this._achN('deliveryFirst', 1);
         // 累计 10 单外卖（跨局 tot + 本局增量）
-        case 'totalDeliveries10': return (tot.deliveries || 0) + c.deliveries >= 10;
+        case 'totalDeliveries10': return (tot.deliveries || 0) + c.deliveries >= this._achN('deliveriesTotal', 10);
         // 跨天结算时仍完成了一单外卖（食物已提交、骑手配送跨天）
-        case 'crossDayDelivery': return c.crossDay >= 1;
+        case 'crossDayDelivery': return c.crossDay >= this._achN('crossDayCount', 1);
         // 一周内经历 3 种以上天气
-        case 'weatherVariety3': return when === 'week' && this.weekWeatherVariety() >= 3;
+        case 'weatherVariety3': return when === 'week' && this.weekWeatherVariety() >= this._achN('weatherVariety', 3);
         // 单日成交 12 单
-        case 'dayOrders12': return st.served >= 12;
+        case 'dayOrders12': return st.served >= this._achN('dayOrders', 12);
         // 持有金币达到 500
-        case 'coins500': return s.coins >= 500;
+        case 'coins500': return s.coins >= this._achN('coinsRich', 500);
         // 累计营业额 5000
-        case 'totalRevenue5000': return (tot.revenue || 0) + c.revenue >= 5000;
-        // 累计获得 30 枚猫猫币（跨局持久化在 ach.counters.catCoins）
-        case 'catCoins30': return (tot.catCoins || 0) >= 30;
+        case 'totalRevenue5000': return (tot.revenue || 0) + c.revenue >= this._achN('totalRevenueBig', 5000);
+        // 累计获得 30 枚猫猫币：往局已合并的 tot.catCoins + 本局累计 s.catEarned。
+        // 本局累计来自引擎每次发币时写的 s.catEarned（打烊 / 周结 / 金币奖励），
+        // 由 main.js 的 flushAchCounters() 在本局结束时并入 ach.counters.catCoins，
+        // 因此这里把两者相加不会重复计数（已结束的局在 tot 里，进行中的局在 s.catEarned 里）。
+        case 'catCoins30': return (tot.catCoins || 0) + (s.catEarned || 0) >= this._achN('catCoins', 30);
         // 热浪天成交 8 单
-        case 'heatDay8Orders': return s.weather === 'heat' && st.served >= 8;
+        case 'heatDay8Orders': return s.weather === 'heat' && st.served >= this._achN('heatDayServed', 8);
         // 雪天单日营业额 ≥ 150
-        case 'snowDay150': return s.weather === 'snow' && (st.earned + st.bonus) >= 150;
+        case 'snowDay150': return s.weather === 'snow' && (st.earned + st.bonus) >= this._achN('snowDayEarned', 150);
         default: return false;
       }
     };
@@ -453,7 +489,7 @@ export class Game {
     return {
       served: 0, lost: 0, waste: 0, income: 0, earned: 0, bonus: 0, voided: 0, delivered: 0,
       // 外卖分项：deliveryServed = 玩家实际交付；deliveryPending = 日结并入（两者互斥，同一单只落其一）
-      deliveryServed: 0, deliveryPending: 0, deliveryRevenue: 0, deliveryCatCoins: 0,
+      deliveryServed: 0, deliveryPending: 0, deliveryRevenue: 0,
     };
   }
 
@@ -487,12 +523,11 @@ export class Game {
       weather: 'sunny', weekWeather: null, weekWeatherWeek: 0,
       deliveries: [],
       ach: this.blankAch(),
-      stations: { food: this.blankStation('food'), drink: this.blankStation('drink') },
+      stations: this.blankStations(),
       storage: [], customers: [],
       spawnTimer: 0, spawned: 0, perDay: 0, spawnInterval: 0, endTimer: 0,
       paused: false, phase: 'day',
       combo: 0, bestCombo: 0,
-      trashCd: 0,
       time: 0,
       tutorial: { active: false, step: 0 },
       dayStats: this.blankDayStats(),
@@ -705,10 +740,13 @@ export class Game {
     s.paused = false; // 跨日/跨周不再继承暂停态（L10）
     s.time = 0; // 当日时钟从 0 起算（外卖 phoneAt/riderAt 是当日 0ms 基准，S1）
     s.customers = [];
+    // 隔天只保仓库：灶台上的东西（输入格 / 输出槽 / 正在读条的那份）一律清空，不返还、不计浪费。
+    // 放在 startDay 而不是 nextDay，是为了让 newRun / nextWeek / 读档走同一条路径；
+    // resume() 会在 startDay 之后用存档覆盖工位，所以同一天存档仍然完整。
+    if (s.stations) this._resetStations(s);
     s.spawned = 0;
     s.endTimer = 0;
     s.combo = 0;
-    s.trashCd = 0;
     s.dayStats = this.blankDayStats();
     const pace = this.pace;
     s.dayDuration = pace.dayDurationMs || (pace.spawnIntervalMs * pace.customersPerDay);
@@ -717,7 +755,11 @@ export class Game {
     this.ensureWeekWeather();
     s.weather = s.weekWeather[d - 1] || 'sunny';
     const w = this.weatherCfg();
-    s.perDay = Math.max(1, Math.round(pace.customersPerDay / (w.spawnMul || 1)));
+    // 顾客数随周数增长（config 驱动）：先让天气 spawnMul 作用于基准，再叠周增长，最后夹 cap。
+    // 这样「恶劣天气人少」的相对关系不变，只是每周整体上浮。
+    const grow = Math.max(0, Math.round(((s.week || 1) - 1) * (this.cfg.economy.customersPerWeekGrowth || 0)));
+    const cap = this.cfg.economy.customersPerDayCap || 999;
+    s.perDay = Math.min(cap, Math.max(1, Math.round(pace.customersPerDay / (w.spawnMul || 1)) + grow));
     // 到店间隔由单日时长推导：保证所有顾客能在营业时间内出现
     s.spawnInterval = Math.max(
       pace.minSpawnIntervalMs || 6000,
@@ -844,9 +886,15 @@ export class Game {
     const rnd = s.rng;
     const hard = s.mode === 'hard';
     const main = hard ? 'signatureBurger' : 'burger';
-    const foodPool = (hard ? ['fries', 'salad', 'pizza', 'signatureBurger'] : ['fries', 'salad', 'pizza', 'burger'])
-      .filter((x) => x !== main);
-    const drinkPool = ((this.cfg.meta.dayLoop && this.cfg.meta.dayLoop.drinkPool) || ['coffee', 'milkshake', 'icedTea'])
+    // v2.17.1：食物池与饮品池都改为读 config.meta.dayLoop，引擎里只保留旧数组作兜底 ——
+    // 以后调当日菜单池只改配置，不用动代码。池里的主菜会被 filter 掉（困难模式的
+    // signatureBurger 既是主菜又在池里），未知 id 一并忽略，避免配置写错把菜单抽空。
+    const dayLoop = this.cfg.meta.dayLoop || {};
+    const foodFallback = hard ? ['fries', 'salad', 'pizza', 'signatureBurger'] : ['fries', 'salad', 'pizza', 'burger'];
+    const foodCfg = hard ? (dayLoop.foodPoolHard || dayLoop.foodPool) : dayLoop.foodPool;
+    const foodPool = (Array.isArray(foodCfg) && foodCfg.length ? foodCfg : foodFallback)
+      .filter((x) => x !== main && this.byId.has(x));
+    const drinkPool = ((dayLoop.drinkPool) || ['coffee', 'milkshake', 'icedTea'])
       .filter((id) => this.byId.has(id));
     const shuffle = (arr) => {
       const a = arr.slice();
@@ -1003,9 +1051,6 @@ export class Game {
       if (c.patience <= 0) this.loseCustomer(c);
     }
 
-    // 垃圾桶冷却
-    if (s.trashCd > 0) s.trashCd = Math.max(0, s.trashCd - dt);
-
     // 生成
     if (!s.tutorial.active && s.spawned < s.perDay) {
       s.spawnTimer -= dt;
@@ -1126,7 +1171,9 @@ export class Game {
     s.lastSettle = { ...s.weekStats, week: s.week, coins: s.coins, rent, recycled, discarded };
 
     if (s.coins < 0) {
+      // 房租没凑齐 = 本局结束（不再有「重开本周」）。shortfall 是差额，供清算面板显示。
       s.phase = 'bankrupt';
+      s.lastSettle = { ...s.lastSettle, shortfall: Math.max(0, -s.coins) };
       this.emit('bankrupt', s.lastSettle);
     } else {
       s.phase = 'weekEnd';
@@ -1167,20 +1214,8 @@ export class Game {
     s.weekWeatherWeek = 0;
     s.weekStartCoins = s.coins;
     s.weekStats = this.blankWeekStats();
-    // 与 retryWeek() 对齐：清空读条状态，避免「上一周读条中的产物」跨周残留（L3）
+    // 清空读条状态，避免「上一周读条中的产物」跨周残留（L3）
     this._resetStations(s);
-    this.startDay(1);
-  }
-
-  /** 破产软着陆：重开本周，金币回到进入该周时的实际金币，设备保留 */
-  retryWeek() {
-    const s = this.s;
-    s.coins = s.weekStartCoins;
-    s.weekWeather = null;
-    s.weekWeatherWeek = 0;
-    s.storage = [];
-    this._resetStations(s);
-    s.weekStats = this.blankWeekStats();
     this.startDay(1);
   }
 
@@ -1206,6 +1241,10 @@ export class Game {
   /**
    * 某食材归属的工位
    * 配方表已无 modes 字段（多分支匹配机制自 v1.4 加冰开关移除后废弃），只按 r.inputs 判定
+   *
+   * 注意：这里永远返回**配方默认工位**，点击食材时的自动归属（selectedStation）依赖它。
+   * 通用台（acceptsAll）不参与归属判定 —— 它是玩家显式拖/点过去的「第二选择」，
+   * 所以这个函数的行为必须保持不变。
    */
   stationOfIngredient(key) {
     for (const r of this.crafts.recipes) {
@@ -1222,6 +1261,72 @@ export class Game {
   stationOfProduct(key) {
     const r = this.crafts.recipes.find((x) => x.id === key);
     return r ? r.station : null;
+  }
+
+  /** 工位配置块（不存在返回 null） */
+  stationCfg(key) {
+    const st = this.cfg.stations && this.cfg.stations[key];
+    return st && typeof st === 'object' ? st : null;
+  }
+
+  /**
+   * 该工位是否「通吃」所有食材/成品（config.stations.<key>.acceptsAll）
+   * 典型：通用合成台 —— 任何叶食材、任何成品都能投，不按配方归属拦料。
+   */
+  stationAcceptsAll(key) {
+    const st = this.stationCfg(key);
+    return !!(st && st.acceptsAll);
+  }
+
+  /** 该工位是否禁止产出中间产物（config.stations.<key>.forbidsIntermediate） */
+  stationForbidsIntermediate(key) {
+    const st = this.stationCfg(key);
+    return !!(st && st.forbidsIntermediate);
+  }
+
+  /**
+   * 单次合成读条时长（毫秒）
+   * = 炉灶当前等级 stoveMs × 工位系数 ×（中间产物再 × intermediateStepFactor）
+   * · 中间产物：config.crafting.intermediateStepFactor（0.65，更快）
+   * · 工位系数：config.stations.<key>.timeFactor（通用台 1.5；专用台不配 = 1）
+   * v2.18：两者改成**乘算**。通用台放开做半成品之后，如果只按 0.65 算，
+   * 通用台做半成品会比自己做成品（1.5×）还快，「通用台更慢」的代价就没了；
+   * 乘算后通用台半成品 = 0.975× 炉灶，专用台半成品仍是 0.65×，两边都自洽。
+   * 业务关键配置非法即显式报错（口径同本文件顶部约定）。
+   */
+  stationDuration(stationKey, recipeId) {
+    const st = this.stationCfg(stationKey);
+    // v2.19.3：timeFactor 允许是数组 —— 按灶台等级取第 n 档。
+    // 目的是让通用台「比专用台慢」的代价随升级缩小（1.5 → 1.35），
+    // 否则玩家把钱全花在灶台上、通用台却永远慢 50%，升级就没有获得感。
+    const raw = st && st.timeFactor != null ? st.timeFactor : 1;
+    const factor = Array.isArray(raw)
+      ? raw[Math.min(this.s.devices.stove - 1, raw.length - 1)]
+      : raw;
+    if (typeof factor !== 'number' || !Number.isFinite(factor) || factor <= 0) {
+      throw new Error('[OWK] config.stations.' + stationKey + '.timeFactor 缺失或非法');
+    }
+    const isInter = this.kindOf(recipeId) === 'intermediate';
+    if (isInter) return Math.round(this.stoveMs * this.cfg.crafting.intermediateStepFactor * factor);
+    return Math.round(this.stoveMs * factor);
+  }
+
+  /**
+   * 投料前置校验：这一对料在本工位会合成什么、允不允许做
+   * 目前只拦「禁止产出中间产物的工位（通用台）+ 配方恰好是中间产物」这一种，
+   * 目的是**在扣钱之前**拒绝，避免玩家合成出白亏钱的半成品。
+   * @param {string} stationKey 目标工位
+   * @param {string[]} keys 两件输入的 key
+   * @returns {null | {reason:string, recipeId:string}}
+   */
+  craftGuard(stationKey, keys) {
+    if (!keys || keys.length !== 2) return null;
+    const m = this.ctx.matchCraft(keys);
+    if (!m) return null;
+    if (this.stationForbidsIntermediate(stationKey) && this.kindOf(m.recipeId) === 'intermediate') {
+      return { reason: 'noIntermediate', recipeId: m.recipeId };
+    }
+    return null;
   }
 
   /**
@@ -1248,7 +1353,8 @@ export class Game {
 
     // v2.9：拖到「不对的灶台」时给出可区分的理由，好让视图弹出
     // 「这是甜品台哦」这类可爱提示，而不是笼统的「合成失败」。
-    if (stationKey) {
+    // v2.17：通用台（acceptsAll）不按归属拦料，所以跳过这段判定。
+    if (stationKey && !this.stationAcceptsAll(stationKey)) {
       const own = this.stationOfIngredient(ingKey);
       if (own && own !== stationKey) return { ok: false, reason: 'wrongStation', want: own, got: stationKey };
     }
@@ -1257,9 +1363,13 @@ export class Game {
     if (idx == null || st.inputs[idx]) idx = st.inputs.findIndex((x) => !x);
     if (idx == null || idx < 0) return { ok: false, reason: 'inputsFull' };
 
-    // 即将判定时先校验金币（AC-10）
+    // 即将判定时先校验「这一对能不能做」和「钱够不够」（AC-10）
     const keys = [...st.inputs.filter(Boolean).map((i) => i.key), ingKey];
     if (keys.length === 2) {
+      // 通用台不做中间产物：这一对会合成菜肉饼/饼底就在**扣钱之前**拒绝，
+      // 否则玩家只会拿到一个白亏半份料钱的失败品。
+      const guard = this.craftGuard(target, keys);
+      if (guard) return { ok: false, ...guard };
       const m = this.ctx.matchCraft(keys);
       const cost = m ? m.cost : keys.reduce((a, k) => a + this.leafCost(k), 0);
       if (s.coins < cost) return { ok: false, reason: 'short', cost };
@@ -1284,15 +1394,17 @@ export class Game {
     if (st.output) return { reason: 'outputOccupied' };
     // 失败品只能进垃圾桶，这条不放宽
     if (itemKey === 'fail') return { reason: 'failOnlyTrash' };
+    // v2.17：通用台收所有叶食材 / 成品 / 半成品，不做归属提示
+    const acceptAll = this.stationAcceptsAll(stationKey);
     // 叶食材按配方归属判定
     if (this.leafCost(itemKey) > 0) {
       const own = this.stationOfIngredient(itemKey);
-      if (own && own !== stationKey) return { reason: 'wrongStation', want: own, got: stationKey };
+      if (!acceptAll && own && own !== stationKey) return { reason: 'wrongStation', want: own, got: stationKey };
       return null;
     }
     // 半成品 / 成品：看它自己（及其下一环）属于哪个工位
     const own = this.stationOfProduct(itemKey);
-    if (own && own !== stationKey) return { reason: 'wrongStation', want: own, got: stationKey };
+    if (!acceptAll && own && own !== stationKey) return { reason: 'wrongStation', want: own, got: stationKey };
     return null;
   }
 
@@ -1301,15 +1413,23 @@ export class Game {
     const st = s.stations[stationKey];
     const keys = st.inputs.map((i) => i.key);
     const m = this.ctx.matchCraft(keys);
+
+    // 兜底：禁止产出中间产物的工位（通用台）在这里再拦一次。
+    // 正常路径在 addIngredient / moveItem 投料时已由 craftGuard 拦下，这里防的是
+    // 「以后新增一条投料路径忘了校验」。拦下时**不扣钱、不产失败品、不动料**（保住 uid）。
+    const guard = this.craftGuard(stationKey, keys);
+    if (guard) {
+      this.emit('change');
+      return { ok: false, ...guard };
+    }
+
     st.inputs = this.blankInputs(stationKey);
 
     if (m) {
       s.coins -= m.cost;
-      const isInter = this.kindOf(m.recipeId) === 'intermediate';
-      const factor = isInter ? this.cfg.crafting.intermediateStepFactor : 1;
       st.busy = true;
       st.progress = 0;
-      st.duration = Math.round(this.stoveMs * factor);
+      st.duration = this.stationDuration(stationKey, m.recipeId);
       st.pendingId = m.recipeId;
       st.lastMode = m.mode;
       this.emit('combine', { station: stationKey, recipeId: m.recipeId, cost: m.cost });
@@ -1401,13 +1521,16 @@ export class Game {
     }
 
     if (dst.zone === 'trash') {
-      if (item.key !== 'fail' && s.trashCd > 0) return { ok: false, reason: 'cooldown' };
+      // 丢弃无冷却。垃圾桶升级改成「按物品成本返还」：Lv1 0% / Lv2 20% / Lv3 40% / Lv4 60%。
+      // 失败品没有成本（chainCost 不存在 → 0），所以返 0，天然不需要特判。
       this.takeAt(src);
-      if (item.key !== 'fail') s.trashCd = this.trashCdMs;
+      const cost = this.itemCost(item.key);
+      const refund = Math.floor(cost * this.trashRefundRate);
+      if (refund > 0) s.coins += refund;
       this.bumpCounter('trash', 1);
-      this.emit('trash', { item, bypass: item.key === 'fail' });
+      this.emit('trash', { item, refund, cost, rate: this.trashRefundRate });
       this.emit('change');
-      return { ok: true };
+      return { ok: true, refund };
     }
 
     if (dst.zone === 'storage' || dst.zone === 'buffer') {
@@ -1441,10 +1564,12 @@ export class Game {
       if (idx == null || idx < 0) return { ok: false, reason: 'inputsFull' };
       // 与源为同一格则忽略
       if (src.zone === 'input' && src.station === dst.station && src.index === idx) return { ok: false, reason: 'same' };
-      // 放入后若两格都满 → 预校验金币
+      // 放入后若两格都满 → 先判「这对能不能做」，再预校验金币
       const other = st.inputs.find((x, i) => x && i !== idx);
       if (other) {
         const keys = [other.key, item.key];
+        const guard = this.craftGuard(dst.station, keys);
+        if (guard) return { ok: false, ...guard };
         const m = this.ctx.matchCraft(keys);
         const cost = m ? m.cost : keys.reduce((a, k) => a + this.leafCost(k), 0);
         if (s.coins < cost) return { ok: false, reason: 'short', cost };
@@ -1460,18 +1585,86 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- serving
+  /**
+   * 某件物品能不能填**指定的这一格**订单槽
+   * 只认可售成品（类型必须是 food/drink，半成品与失败品不行），
+   * 并且要满足 slot.accepts —— 等价类（顾客要 cola、冰可乐也能交）在这里天然生效。
+   */
+  fitsSlot(itemKey, slot) {
+    if (!slot || slot.filled) return false;
+    const rec = this.byId.get(itemKey);
+    if (!rec || !rec.type || rec.type === 'intermediate') return false;
+    return slot.slot === rec.type && slot.accepts.includes(itemKey);
+  }
+
+  /** 这件物品能填的订单空槽（serve 与一键提交共用，避免两套匹配口径漂移） */
+  slotFor(customer, itemKey) {
+    return customer.items.find((x) => this.fitsSlot(itemKey, x)) || null;
+  }
+
   serve(item, customer) {
     const s = this.s;
     const rec = this.byId.get(item.key);
-    if (!rec || !rec.type || rec.type === 'intermediate') return { ok: false, reason: 'wrong' };
-    const slot = customer.items.find((x) => !x.filled && x.slot === rec.type && x.accepts.includes(item.key));
-    if (!slot) return { ok: false, reason: 'wrong' };
+    const slot = this.slotFor(customer, item.key);
+    if (!rec || !slot) return { ok: false, reason: 'wrong' };
     slot.filled = item.key;
     s.dayStats.delivered = (s.dayStats.delivered || 0) + 1;
     const complete = customer.items.every((x) => x.filled);
     if (complete) this.settle(customer);
     else this.emit('change');
     return { ok: true, complete };
+  }
+
+  /**
+   * 一键提交：把仓库里的可售成品，按「剩余耐心升序（最急的先交）」依次交给队列里的顾客。
+   *
+   * 口径（与手操拖拽交付完全一致，因为它复用的就是 serve → settle）：
+   * · 只扫 s.storage 里的**可售成品**（kindOf === 'product'）；中间产物 / 失败品一律跳过；
+   * · 匹配走 slotFor()，因此 equivalenceClasses 天然生效（顾客要 cola，仓库里的 icedCola 可以交，
+   *   结算按**实际商品** priceOf(filled) 算，和手操一致）；
+   * · 每交一格都走 serve()，整单齐了由 settle() 结算 → 连击 / 小费 / 耐心比例 / 日统计 /
+   *   成就计数器（orders / revenue / bigOrder / serveTime）全部同一口径，不会漂移；
+   * · 外卖（s.deliveries）不参与，只服务队列里的顾客；教学顾客跳过（教学单必须玩家亲手交）。
+   *
+   * 分配顺序：剩余耐心毫秒数最少的顾客优先（最接近流失的先救），等值按入场顺序。
+   *
+   * @returns {{ok:boolean, count?:number, orders?:number, reason?:string}}
+   *   count = 本次交出去的**件数**；orders = 因此**结算完成的订单数**。
+   *   reason：phase（不在营业中）/ noCustomer（没有在等的顾客）/ empty（仓库无可售成品）/
+   *           noMatch（有顾客也有货，但没有一件对得上任何空槽）。
+   */
+  submitFromStorage() {
+    const s = this.s;
+    if (!s || s.phase !== 'day') return { ok: false, reason: 'phase' };
+    const queue = s.customers.filter((c) => !c.tutorial);
+    if (!queue.length) return { ok: false, reason: 'noCustomer' };
+    if (!s.storage.some((it) => this.kindOf(it.key) === 'product')) return { ok: false, reason: 'empty' };
+
+    let count = 0;
+    let orders = 0;
+    // 最急的优先：剩余耐心升序（等值保持入场顺序，sort 稳定 + 显式序号兜底）
+    const order = queue
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => (a.c.patience - b.c.patience) || (a.i - b.i))
+      .map((x) => x.c);
+
+    for (const c of order) {
+      for (const slot of c.items) {
+        if (slot.filled) continue;
+        // 只从仓库里找「能填这一格」的那一件：类型 + accepts（含等价类）都由 fitsSlot 统一判定
+        const idx = s.storage.findIndex((it) => this.fitsSlot(it.key, slot));
+        if (idx < 0) continue;
+        const item = s.storage[idx];
+        s.storage.splice(idx, 1);
+        const r = this.serve(item, c);
+        if (!r.ok) { s.storage.splice(idx, 0, item); continue; } // 理论上不会发生：原样放回去
+        count += 1;
+        if (r.complete) orders += 1;
+      }
+    }
+    if (!count) return { ok: false, reason: 'noMatch' };
+    this.emit('change');
+    return { ok: true, count, orders };
   }
 
   settle(customer) {
@@ -1538,27 +1731,27 @@ export class Game {
   deviceInfo(key) {
     const s = this.s;
     const lv = s.devices[key];
+    // 垃圾桶：等级只决定「丢弃返还比例」（0% / 20% / 40% / 60%），不再有冷却
     if (key === 'trash') {
       const lvls = this.cfg.trash.levels;
       const max = lvls.length;
-      if (lv >= max) return { key, lv, max, maxed: true, cost: 0, refund: 0, next: null };
+      const cur = lvls[lv - 1].refundRate || 0;
+      if (lv >= max) return { key, lv, max, maxed: true, cost: 0, cur, next: null };
       return {
         key, lv, max, maxed: false,
         cost: lvls[lv].upgradeCost,
-        refund: Math.floor(lvls.slice(0, lv).reduce((a, x) => a + (x.upgradeCost || 0), 0) * this.cfg.devices.refund.rate),
-        next: lvls[lv].cooldownMs,
-        cur: lvls[lv - 1].cooldownMs,
+        cur,
+        next: lvls[lv].refundRate || 0,
       };
     }
     const dev = this.cfg.devices[key];
     const max = dev.levels;
-    if (lv >= max) return { key, lv, max, maxed: true, cost: 0, refund: 0, next: null };
+    if (lv >= max) return { key, lv, max, maxed: true, cost: 0, cur: dev.values[lv - 1], next: null };
     return {
       key, lv, max, maxed: false,
       cost: dev.upgradeCost[lv - 1],
-      refund: Math.floor(dev.upgradeCost.slice(0, lv - 1).reduce((a, x) => a + x, 0) * this.cfg.devices.refund.rate),
-      next: dev.values[lv],
       cur: dev.values[lv - 1],
+      next: dev.values[lv],
     };
   }
 
@@ -1567,11 +1760,12 @@ export class Game {
     const info = this.deviceInfo(key);
     if (info.maxed) return { ok: false, reason: 'max' };
     if (s.coins < info.cost) return { ok: false, reason: 'coins', cost: info.cost };
-    s.coins += info.refund - info.cost;
+    // 升级全额扣费：旧的「按累计投入返还 50%」已移除，升级不再有返现
+    s.coins -= info.cost;
     s.devices[key] = info.lv + 1;
-    this.emit('upgraded', { key, lv: info.lv + 1, cost: info.cost, refund: info.refund });
+    this.emit('upgraded', { key, lv: info.lv + 1, cost: info.cost });
     this.emit('change');
-    return { ok: true, lv: info.lv + 1, cost: info.cost, refund: info.refund };
+    return { ok: true, lv: info.lv + 1, cost: info.cost };
   }
 
   // ---------------------------------------------------------------- misc

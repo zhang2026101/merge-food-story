@@ -10,3 +10,16 @@ node_modules/
 .env
 .env.*
 token.txt
+
+# 本地工具产物：截图 / 渲染音频 / Playwright 缓存 / 构建输出
+# 这些目录动辄几十 MB（tools/shots 39M 截图、*.wav 6M 音频），一旦被整目录 add
+# 进历史就无法回滚 —— git 历史只能变胖，不能变瘦。所以宁可多忽略。
+tools/shots/
+qa-shot-*.png
+*.wav
+.pw/
+app-native/
+.android-build/
+APK/
+*.genie
+.workbuddy*/

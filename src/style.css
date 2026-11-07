@@ -11,6 +11,22 @@
   --green: #6FAE5B;
   --blue: #6FB6D6;
 
+  /* ---- 语义色：浅色主题等于原值（视觉零变化），深色主题由 applyTheme() 成套翻转 ---- */
+  /* 表面：卡片 / 格子 / 按钮的填充底 */
+  --surface: #FFFFFF;
+  /* 次级表面：槽底、进度条轨道、徽章底 */
+  --surface-2: #F7F2E6;
+  /* 强调表面：输出槽、选中态、VIP 气泡等暖色底 */
+  --surface-accent: #FFF8E7;
+  /* 辅助文字：比 --ink-2 弱一档 */
+  --muted: #A79C87;
+  /* 占位符号（+ → —）：最弱 */
+  --faint: #BEB5A2;
+  /* 暖金文字：价格、链接、提示徽标 */
+  --warm-ink: #8C7A4E;
+  /* 客人队列的背景纹理（内含写死的浅色，深色主题要换掉） */
+  --queue-deco: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Crect width='26' height='26' fill='%23FFF7E8'/%3E%3Crect width='4' height='26' fill='%23FAEDD6'/%3E%3C/svg%3E");
+
   /* 由 layout.json 覆盖 */
   --hud-h: 56px;
   --op-w: 470px;
@@ -18,8 +34,19 @@
   --ings-h: 128px;
   --gap: 8px;
   --pad: 10px;
-  --slot: 78px;
+  /* v2.18：三个合成台格位统一一个尺寸（= layout.json 的 sizing.stationSlot）。
+     v2.19.2：用户反馈「槽位有点小」，从 54 放大到 72，与仓库格位同尺寸。
+     台高 141.3（440 扣掉两个 gap 后三等分）扣掉 border 5 + padding 9 + 标题行 23.1
+     + 进度条 12（8 高 + 4 margin）+ .st-body 的 padding-top 3 后仍有 ~89，72 稳放得下；
+     横向 2×72 + 箭头 14 + 4×gap 8 = 190 ≪ 台内可用宽 446，也不会横向溢出。
+     ≥48 是触控底线（844×390 下 72 渲染约 42px，比 54 时的 32px 更好按）。 */
+  --slot: 72px;
   --store-slot: 64px;
+  /* v2.18：--uni-slot 已与 --slot 同值，保留成别名只为兼容既有样式与断言 */
+  --uni-slot: 72px;
+  --submit-w: 66px;
+  /* v2.18：垃圾桶宽度也进 layout.json（sizing.trashW），不再在 .shelf .trash 里写死 */
+  --trash-w: 110px;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -29,14 +56,15 @@ html, body {
   background: #17181A;
   overflow: hidden;
   font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: var(--ink);
+  /* 用 --ink-strong 而非 --ink：--ink 固定深色（现在只当描边用），文字色必须随主题翻转 */
+  color: var(--ink-strong);
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
   overscroll-behavior: none;
 }
 
-/* 舞台：高度固定 660，宽度由 JS 按视口宽高比算出，整体等比缩放 */
+/* 舞台：高度固定 660（手机横屏走紧凑档时为 600），宽度由 JS 按视口宽高比算出，整体等比缩放 */
 #stage {
   position: absolute;
   left: 50%;
@@ -48,6 +76,28 @@ html, body {
   overflow: hidden;
   touch-action: none;
   box-shadow: 0 0 60px rgba(0, 0, 0, .55);
+}
+
+/* ============================================================ 安全区（v2.20.0）
+   index.html 已经开了 viewport-fit=cover，所以 env(safe-area-inset-*) 有值可用。
+   - 四个量抽成自定义属性：一处改动全局生效，且自动化测试可以覆盖它们来模拟刘海；
+   - env() 取不到时回落 0px（桌面 / 平板 / 无刘海手机 → #safe 就是整个视口，行为零变化）。
+   - #safe 用 position: fixed + 四个方向的 inset，矩形就是「可用区」；
+     #stage 仍是 left/top 50% 居中，于是它居中于可用区而不是整块屏幕。
+   - 不用 padding 而用 inset：padding 会把 50% 的参考盒子撑大，居中和 scale 都会算歪。 */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+}
+#safe {
+  position: fixed;
+  top: var(--safe-t);
+  right: var(--safe-r);
+  bottom: var(--safe-b);
+  left: var(--safe-l);
+  overflow: hidden;
 }
 
 .screen { position: absolute; inset: 0; }
@@ -75,28 +125,28 @@ button:disabled { cursor: default; }
 .coin-pill {
   display: flex; align-items: center; gap: 8px;
   border: 2.5px solid var(--ink); border-radius: 999px;
-  background: #fff; padding: 2px 13px 2px 7px; height: 40px;
+  background: var(--surface); padding: 2px 13px 2px 7px; height: 40px;
   box-shadow: 0 2px 0 rgba(43, 43, 43, .12);
 }
 .coin-pill .ic { width: 27px; height: 27px; flex: 0 0 27px; }
 .coin-pill b { font-size: 27px; letter-spacing: -.5px; line-height: 1; }
 
 .hud-day { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; white-space: nowrap; }
-.hud-day .sep { width: 2px; height: 20px; background: #D8CEB8; border-radius: 2px; }
+.hud-day .sep { width: 2px; height: 20px; background: var(--line); border-radius: 2px; }
 .mode-tag {
   font-size: 17px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
-  border: 2px solid var(--ink); background: #fff; white-space: nowrap;
+  border: 2px solid var(--ink); background: var(--surface); white-space: nowrap;
 }
 .combo-pill {
-  font-size: 17px; font-weight: 700; color: #A79571; white-space: nowrap;
-  border: 2px dashed #D8CEB8; border-radius: 999px; padding: 3px 11px;
+  font-size: 17px; font-weight: 700; color: var(--muted); white-space: nowrap;
+  border: 2px dashed var(--line); border-radius: 999px; padding: 3px 11px;
   transition: background .18s, color .18s, border-color .18s;
 }
 .combo-pill.on { color: #7A4E12; background: #FFE7B8; border-color: var(--gold); border-style: solid; }
 
 .act {
   display: flex; align-items: center; gap: 6px; height: 40px;
-  border: 2.5px solid var(--ink); border-radius: 12px; background: #fff;
+  border: 2.5px solid var(--ink); border-radius: 12px; background: var(--surface);
   padding: 0 10px; font-size: 18px; font-weight: 700;
   box-shadow: 0 2px 0 rgba(43, 43, 43, .14);
   transition: transform .1s, background .15s;
@@ -104,20 +154,40 @@ button:disabled { cursor: default; }
 .act .ic { width: 20px; height: 20px; }
 .act:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(43, 43, 43, .14); }
 
+/* 本周租金：和金币胶囊区分开（钱是要交出去的，用描边而非实心黄） */
+.rent-pill {
+  display: flex; align-items: center; gap: 6px;
+  height: 40px; padding: 0 12px 0 8px;
+  border: 2.5px dashed var(--ink); border-radius: 12px;
+  background: var(--surface); font-size: 18px; font-weight: 800;
+  box-shadow: 0 2px 0 rgba(43, 43, 43, .10);
+}
+.rent-pill .ic { width: 22px; height: 22px; flex: 0 0 22px; }
+.rent-pill .rent-lb { font-size: 12px; font-weight: 700; color: var(--ink-2); letter-spacing: .5px; }
+.rent-pill b { font-variant-numeric: tabular-nums; }
+/* 差得有点远时整颗变红，让玩家一眼看出「这周悬了」 */
+.rent-pill.tight { border-color: #D0402F; background: #FFF1EE; color: #B33E2E; }
+
 /* ============================================================ 主体 */
 #screen-game { display: flex; flex-direction: column; gap: var(--gap); padding: var(--pad); }
 .board {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: minmax(0, 1fr) var(--op-w);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--op-w);
+  /* v2.17：第二行是「仓储行」（仓库 + 一键提交 + 垃圾桶）。
+     v2.18：操作列改为跨两行（.op 的 grid-row: 1 / span 2），仓储行只占左列，
+     于是左列 = 排队区 + 仓储行，右列 = 三个合成台一路拉到仓储行底边。 */
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--gap);
 }
 
 /* ---------------- 排队区 ---------------- */
 .queue {
+  grid-column: 1; grid-row: 1;
   display: flex; flex-direction: column; gap: 6px; min-width: 0;
   border: 2.5px solid var(--ink); border-radius: 18px;
-  background-color: #FFF7E8;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Crect width='26' height='26' fill='%23FFF7E8'/%3E%3Crect width='4' height='26' fill='%23FAEDD6'/%3E%3C/svg%3E");
+  background-color: var(--surface-accent);
+  background-image: var(--queue-deco);
   background-size: 26px 26px;
   padding: 8px 10px 10px;
   position: relative; overflow: hidden;
@@ -141,8 +211,11 @@ button:disabled { cursor: default; }
 }
 
 .cust-row {
+  /* v2.19.4：上内边距 16px → 2px。顾客本来就是 justify-end（贴底），
+     非教程局这 14px 只是顶部空白；教程局里它能决定气泡顶部会不会被裁。
+     实测改完可用高度 266px ≥ 内容所需 262px，气泡完整显示。 */
   flex: 1; min-height: 0; display: flex; align-items: flex-end; justify-content: center;
-  gap: 6px; padding: 16px 86px 12px 14px; z-index: 1; overflow: hidden;
+  gap: 6px; padding: 2px 86px 12px 14px; z-index: 1; overflow: hidden;
 }
 
 .cust {
@@ -157,18 +230,18 @@ button:disabled { cursor: default; }
 .bubble {
   position: relative; width: 100%; max-width: 196px;
   border: 2px solid var(--ink); border-radius: 16px;
-  background: #fff; padding: 5px 7px 7px; margin-bottom: 8px;
+  background: var(--surface); padding: 5px 7px 7px; margin-bottom: 8px;
   box-shadow: 0 2px 0 rgba(43, 43, 43, .1);
   transition: border-color .18s;
 }
 .bubble::after {
   content: ''; position: absolute; left: 50%; bottom: -9px;
-  width: 14px; height: 14px; background: #fff;
+  width: 14px; height: 14px; background: var(--surface);
   border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
   transform: translateX(-50%) rotate(45deg);
 }
-.cust.vip .bubble { border-color: var(--gold); background: #FFFBF0; }
-.cust.vip .bubble::after { border-color: var(--gold); background: #FFFBF0; }
+.cust.vip .bubble { border-color: var(--gold); background: var(--surface-accent); }
+.cust.vip .bubble::after { border-color: var(--gold); background: var(--surface-accent); }
 
 .order { display: flex; justify-content: center; gap: 6px; }
 .ord { position: relative; width: 56px; height: 56px; flex: 0 1 56px; }
@@ -183,11 +256,11 @@ button:disabled { cursor: default; }
   font-size: 13px; line-height: 20px; text-align: center; font-style: normal;
   border: 2px solid #fff;
 }
-.pbar { height: 8px; border-radius: 5px; background: #EFE8D8; overflow: hidden; margin-top: 6px; }
+.pbar { height: 8px; border-radius: 5px; background: var(--surface-2); overflow: hidden; margin-top: 6px; }
 .pbar > i { display: block; height: 100%; width: 100%; background: var(--green); transition: width .1s linear; }
 .dismiss {
   position: absolute; right: -10px; top: -10px; width: 24px; height: 24px;
-  border-radius: 50%; border: 2px solid var(--ink); background: #fff;
+  border-radius: 50%; border: 2px solid var(--ink); background: var(--surface);
   font-size: 15px; line-height: 1; font-weight: 700; color: var(--ink-2);
   display: flex; align-items: center; justify-content: center;
 }
@@ -199,20 +272,36 @@ button:disabled { cursor: default; }
 }
 
 .figure {
-  flex: 0 0 auto; width: 100%; max-width: 150px;
+  /* v2.19.4：flex 由 0 0 auto 改成 0 1 auto（允许收缩）。
+     原来禁止收缩 + 固定 150 宽，教程局里「气泡 92 + 人物 187」超出顾客行可用高度时，
+     它寸步不让，把气泡顶出容器、被 overflow:hidden 裁掉顶部 21px ——
+     玩家看到的就是「教程文字压住了顾客气泡」。
+     改成可收缩后，空间够时仍按 150 宽渲染（普通局完全不变），
+     空间不够时按 aspect-ratio 等比缩小，气泡始终完整。 */
+  flex: 0 1 auto; width: 100%; max-width: 150px;
   aspect-ratio: 128 / 160;
   max-height: 100%;
 }
 .figure .ic { width: 100%; height: 100%; }
+/* v2.19.4：教程局把顾客收窄一档（150 → 126），高度随 aspect-ratio 从 187 降到 157。
+   客区总高固定 336，教程条要占 33，剩下的高度装不下「气泡 92 + 人物 187」——
+   不加这条气泡顶部会被裁掉 21px。非教程局没有 .tut-on，尺寸不变。 */
+.queue.tut-on .figure { max-width: 126px; }
 
-/* ---------------- 操作区（双工位） ---------------- */
-.op { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+/* ---------------- 操作区（三个合成台竖排，v2.18） ---------------- */
+/* v2.18：操作列跨两行（1 / span 2），高度 = 首行 + gap + 仓储行 = 440，
+   于是三个合成台能纵向拉满到仓储行底边，操作列下方不再留 104px 空档。
+   宽度仍是 sizing.opW（列宽），格位是 sizing.stationSlot（v2.19.2 起 72，与仓库格位同尺寸）。 */
+.op { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
 
 .station {
   position: relative; overflow: hidden;
-  flex: 1; min-height: 0;
-  border: 2.5px solid var(--ink); border-radius: 16px; background: #fff;
-  padding: 6px 12px 6px; display: flex; flex-direction: column;
+  /* v2.18：三台等高靠 flex:1 1 0 均分（gap 由 .stations 给），不写死每台高度 ——
+     窗口高度变化时三台仍然等高，通用台也不会掉队 */
+  flex: 1 1 0; min-height: 0;
+  border: 2.5px solid var(--ink); border-radius: 16px; background: var(--surface);
+  /* 台高只有 ~106px，纵向留白从 6px 收到 4/5px，省下来的都给了格位 */
+  padding: 4px 12px 5px; display: flex; flex-direction: column;
   transition: border-color .18s, box-shadow .18s;
 }
 .station::before {
@@ -220,61 +309,96 @@ button:disabled { cursor: default; }
   background: var(--gold);
 }
 .station[data-station="drink"]::before { background: var(--blue); }
+/* 通用台（v2.18）：与两台专业台同一套结构，只把左色条换成绿色 */
+.station.uni::before { background: var(--green); }
 .station.sel { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(232, 169, 59, .26); }
 .station.tut { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(232, 169, 59, .45); }
+.station.busy { border-color: var(--warm-ink); }
+/* v2.18 点击链路：选中食材后标出「这个台收不收它」——
+   can-drop = 亮金框（可以点），no-drop = 压暗（归属不对 / 正忙 / 输出槽占着）。
+   只做视觉提示，真正的校验仍在 engine.addIngredient，两者判据同源（view.stationRejectsIng）。 */
+.station.can-drop { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(232, 169, 59, .2); }
+.station.can-drop .st-bar { background: var(--surface); }
+.station.no-drop { opacity: .45; }
 .st-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.st-name { font-size: 24px; font-weight: 800; white-space: nowrap; }
+/* 标题行三台共用：21px/1.1 的行盒 = 23.1px。这里每多 1px 都是从格位上抢来的，
+   再加上「行盒高度由 .st-lv 的 line-height 16px 兜底」这一点，21px 是还能容下 72px 格位的上限 */
+.st-name { font-size: 21px; line-height: 1.1; font-weight: 800; white-space: nowrap; color: var(--ink-strong); }
+/* 通用台的说明小字（三台里只有它有副标题）。
+   颜色用 --ink-2 而不是 --muted：12px 的小字在**浅色**主题下 --muted 只有 2.71:1
+   （AA 要 4.5），换成次级文字色后浅色 6.1 / 深色 5.9 都过线（tools/v218-contrast.mjs 可复验）。 */
+.st-note {
+  font-style: normal; font-size: 12px; line-height: 1.1; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 .st-lv {
-  font-size: 15px; font-weight: 700; padding: 1px 8px; border-radius: 8px;
-  background: #F1EDE2; color: var(--ink-2); white-space: nowrap;
+  font-size: 13px; line-height: 16px; font-weight: 700; padding: 0 7px; border-radius: 8px;
+  background: var(--surface-2); color: var(--ink-2); white-space: nowrap;
 }
 
-.st-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding-top: 6px; }
+.st-body { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding-top: 3px; }
 .slot {
   width: var(--slot); height: var(--slot); flex: 0 0 var(--slot);
-  border: 2.5px dashed #CFC6B2; border-radius: 14px; background: #FCFAF4;
+  border: 2.5px dashed var(--line); border-radius: 14px; background: var(--surface-2);
   display: flex; align-items: center; justify-content: center; position: relative;
   transition: border-color .15s, background .15s;
 }
-.slot.filled { border: 2.5px solid var(--ink); background: #fff; }
-.slot.out { border: 2.5px solid var(--ink); background: #FFF8E7; }
+.slot.filled { border: 2.5px solid var(--ink); background: var(--surface); }
+.slot.out { border: 2.5px solid var(--ink); background: var(--surface-accent); }
 .slot.tut { outline: 4px solid var(--gold); outline-offset: 2px; }
-.slot-ph { font-size: 20px; color: #BEB5A2; font-weight: 700; }
-.slot-ph.busy { font-size: 15px; color: #B08A3E; padding: 0 2px; text-align: center; line-height: 1.2; }
-.slot-plus, .slot-arrow { color: #BEB5A2; font-size: 22px; font-weight: 700; width: 14px; text-align: center; }
+.slot-ph { font-size: 20px; color: var(--faint); font-weight: 700; }
+/* v2.18：格位收到 54px 后（v2.19.2 起放大到 72px），「咕嘟咕嘟…」用 15px 会顶出格子（两行还带溢出），
+   缩到 12px/1.15 正好两行落在格内；通用台仍只放一个省略号（见 buildUniversal 的注释）。
+   颜色用 --ink-2：12px 的小字在浅色主题下 --warm-ink 只有 3.96:1（AA 要 4.5），
+   换次级文字色后浅色 5.6 / 深色 5.2 都过线。 */
+.slot-ph.busy { font-size: 12px; line-height: 1.15; color: var(--ink-2); padding: 0 2px; text-align: center; }
+.slot-plus, .slot-arrow { color: var(--faint); font-size: 22px; font-weight: 700; width: 14px; text-align: center; }
 /* v2.12：输出槽右侧的「↓ 入料」按钮已移除 —— 半成品直接拖回输入格/仓库。 */
 .st-bar {
-  flex: 0 0 auto; height: 10px; margin-top: 6px; border-radius: 6px; background: #F1EDE2;
+  flex: 0 0 auto; height: 8px; margin-top: 4px; border-radius: 6px; background: var(--surface-2);
   border: 1px solid var(--line); overflow: hidden;
 }
 .st-bar i { display: block; height: 100%; width: 0; background: var(--gold); transition: width .08s linear; }
 
-/* ---------------- 仓储 / 缓冲 / 垃圾桶 ---------------- */
+/* ---------------- 仓储行 / 垃圾桶 / 一键提交 ---------------- */
+/* v2.18：仓储行只占左列（grid-column: 1）、铺满到操作列左边缘 ——
+   宽度 = 左列宽（1fr），右边缘 = 操作列左边缘 − gap，右侧不再留 566px 空白。
+   操作列已经跨两行，所以第二行只剩仓储行，不需要（也不该）再横跨两列。
+   行内顺序：仓库（flex:1 吃掉剩余宽度）→ 一键提交（sizing.submitW）→ 垃圾桶（贴最右端）。 */
 .shelf {
-  height: var(--shelf-h); flex: 0 0 auto;
-  display: flex; gap: var(--gap); min-width: 0;
+  grid-column: 1; grid-row: 2;
+  height: var(--shelf-h); min-width: 0;
+  display: flex; gap: var(--gap); align-items: stretch; justify-content: flex-start;
 }
-.shelf .store { flex: 1; min-width: 0; }
-.shelf .trash { width: 92px; flex: 0 0 92px; }
+.shelf .store { flex: 1 1 auto; min-width: 0; }
+.shelf .trash { width: var(--trash-w); flex: 0 0 var(--trash-w); }
+/* v2.19：按用户要求去掉仓库卡片的外框（原本 2.5px 深色圆角框 + 白底），
+   仓库变成一条「无框区域」：只留「仓库 1/5」标签、5 个格位、一键提交。
+   背景同时改成透明，否则去掉边框后还会留一块白色矩形，比有框更难看。 */
 .store {
-  border: 2.5px solid var(--ink); border-radius: 16px; background: #fff;
-  padding: 4px 10px 8px; display: flex; flex-direction: column; min-width: 0;
+  border: 0; background: transparent; border-radius: 0;
+  padding: 2px 0 0; display: flex; flex-direction: row; align-items: stretch;
+  gap: 8px; min-width: 0;
 }
+.store-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .row-head {
   display: flex; justify-content: space-between; align-items: baseline;
   font-size: 16px; font-weight: 700; color: var(--ink-2); padding: 0 2px 2px; flex: 0 0 auto;
 }
-.row-head em { font-style: normal; font-weight: 600; color: #A79C87; font-size: 15px; }
+.row-head em { font-style: normal; font-weight: 600; color: var(--muted); font-size: 15px; }
+/* v2.18：仓库变宽（左列 622 − 垃圾桶 110 − gap）后，格位从 64 放到 72（sizing.storeSlot），
+   首尾格位分别对齐标题行的「主仓储」与「n/5」两端，中间均匀分布 —— 不再挤在左边。 */
 .slots {
-  flex: 1; min-height: 0; display: flex; gap: 5px; justify-content: center; align-items: center;
+  flex: 1; min-height: 0; display: flex; gap: 12px; justify-content: center; align-items: center;
 }
+/* 格位上限 84：舞台很宽（844×390 时逻辑宽 1428）时给格位留一点自适应余量，不会拉成方块 */
 .slot.sm {
   width: var(--store-slot); height: var(--store-slot); flex: 0 1 var(--store-slot);
   border-radius: 12px; max-width: 84px;
 }
 
 .trash {
-  border: 2.5px solid var(--ink); border-radius: 16px; background: #fff;
+  border: 2.5px solid var(--ink); border-radius: 16px; background: var(--surface);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 1px; box-shadow: 0 2px 0 rgba(43, 43, 43, .12); transition: opacity .18s;
 }
@@ -282,6 +406,53 @@ button:disabled { cursor: default; }
 .trash-lv { font-size: 12px; font-weight: 700; color: var(--ink-2); white-space: nowrap; }
 .trash-tip { font-size: 11px; color: var(--red); height: 12px; white-space: nowrap; }
 .trash.cooling { opacity: .42; }
+
+/* 一键提交（v2.17）：仓库行内、紧邻垃圾桶。
+   竖排「图标 + 文字」，整块高度吃满仓储行，触控热区约 66×80 逻辑像素。 */
+.submit-btn {
+  flex: 0 0 var(--submit-w); width: var(--submit-w);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 4px 2px; min-height: 40px;
+  border: 2.5px solid var(--ink); border-radius: 12px;
+  background: var(--surface-accent); color: var(--ink-strong);
+  box-shadow: 0 2px 0 rgba(43, 43, 43, .12);
+  font-size: 13px; font-weight: 800; line-height: 1.15; text-align: center;
+  transition: transform .1s, opacity .18s;
+}
+.submit-btn .submit-ic { width: 24px; height: 24px; flex: 0 0 24px; display: block; }
+.submit-btn .submit-ic .ic { width: 100%; height: 100%; }
+.submit-btn:active { transform: translateY(1px); }
+.submit-btn:disabled, .submit-btn.cooling { opacity: .45; }
+
+/* ============================================================ 触控热区（v2.18）
+   手机上整块舞台按「视口高 / 660」缩放（844×390 下 ≈ 0.59），按钮的**视觉**尺寸跟着缩水。
+   改视觉就得重排布局，所以这里只把**命中区**向外撑一圈：透明伪元素不参与绘制，
+   但会被 elementFromPoint 命中，等于凭空多出一圈可点范围。
+   只加在「没有可交互子元素」的控件上 —— 槽位里有 .item（拖拽源），
+   伪元素会盖住它导致拖不动，所以合成台格位 / 仓库格位不在此列。 */
+.act, .ing, .submit-btn { position: relative; }
+.act::after { content: ''; position: absolute; inset: -8px -4px; }
+.ing::after { content: ''; position: absolute; inset: -2px -3px; }
+.submit-btn::after { content: ''; position: absolute; inset: -4px -3px; }
+/* 顾客气泡右上角的「×」只有 24px，最容易点空 */
+.dismiss::after { content: ''; position: absolute; inset: -8px; }
+
+/* ---------------- 通用合成台（v2.18）：与专业台同构，只留修饰 ---------------- */
+/* 结构（.st-head / .st-body / .slot / .st-bar）、边框、内边距、圆角全部复用 .station，
+   这里只补两件事：
+     1) .uni-name 的文字色 —— 与 .st-name 一样必须走 --ink-strong（--ink 只做描边，
+        深色皮肤下 --ink 不翻转，拿它写文字会瞎）；
+     2) 左色条颜色（.station.uni::before，绿色）。
+   通用台的进度条与专业台完全一致（全宽、贴底），不再需要 .uni-side / .uni-bar。
+
+   #universal 只是 JS 的填充容器：用 display: contents 把它的盒子从布局里摘掉，
+   这样 .station.uni 就和两台专业台一样是 .stations 的直接 flex 子项，三台的高度分配
+   完全同源。**踩过的坑**：保留一层 display:flex 的中间盒子时，它的高度会被内容最小尺寸
+   牵着走，实测三台是 111/111/98（不等高），换成 contents 才是 111/111/111。 */
+.uni-wrap { display: contents; }
+/* 通用台与专业台同底同框：底色与描边都走语义变量（深色皮肤下不能留白块 / 不能拿 --ink 当文字色） */
+.uni { background: var(--surface); border-color: var(--ink); }
+.uni-name { color: var(--ink-strong); }
 
 /* ---------------- 食材区 ---------------- */
 .ings {
@@ -293,28 +464,51 @@ button:disabled { cursor: default; }
 }
 .ing {
   display: flex; align-items: center; gap: 7px; padding: 0 8px; min-width: 0;
-  border: 2.5px solid var(--ink); border-radius: 13px; background: #fff;
+  border: 2.5px solid var(--ink); border-radius: 13px; background: var(--surface);
   box-shadow: 0 2px 0 rgba(43, 43, 43, .12);
   transition: transform .1s, opacity .18s, border-color .18s;
 }
 .ing-ic { width: 40px; height: 40px; flex: 0 0 40px; }
 .ing-meta { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; min-width: 0; }
 .ing-meta b { font-size: 20px; white-space: nowrap; }
-.ing-meta i { font-style: normal; font-size: 16px; color: #B08A3E; font-weight: 600; }
+.ing-meta i { font-style: normal; font-size: 16px; color: var(--warm-ink); font-weight: 600; }
 .ing:active { transform: translateY(1px) scale(.985); }
 .ing.dim { opacity: .42; border-color: #CFC7B6; box-shadow: none; }
 .ing.poor { background: #FBEFEC; border-color: #E3B7AE; }
 .ing.poor .ing-meta i { color: var(--red); font-weight: 800; }
 .ing.tut { outline: 4px solid var(--gold); outline-offset: 1px; }
+/* v2.18 点击链路：食材的「已选中」态。用金边 + 浅金底，和 .tut 的教学描边区分开
+   （教学是 outline 外扩，选中是 border 内收 + 填充），两者同时出现也认得出。 */
+.ing.sel {
+  border-color: var(--gold);
+  background: var(--surface-accent);
+  box-shadow: 0 0 0 3px rgba(232, 169, 59, .3), 0 2px 0 rgba(43, 43, 43, .12);
+}
 
 /* ============================================================ 物品与拖拽 */
 .item { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; cursor: grab; }
 .item .ic { width: 92%; height: 92%; }
 .item.dragging { opacity: .3; }
-.item.sel { outline: 4px solid var(--gold); outline-offset: -4px; border-radius: 12px; background: #FFF3D8; }
+.item.sel { outline: 4px solid var(--gold); outline-offset: -4px; border-radius: 12px; background: var(--surface-accent); }
 /* v2.9.1：失败品改为简笔画线条，不再用暗色底衬（用户反馈「太重、像个黑疙瘩」） */
 .item.fail { background: none; }
 .drop-hot { box-shadow: 0 0 0 4px var(--gold) inset; }
+/* v2.19.2：仓库的投放提示不再用「整块 4px 金色内框」（用户觉得难看：拖到仓库上方时
+   整个仓库区被一圈金框包住）。合成台 / 垃圾桶 / 顾客仍然走上面的 .drop-hot 通用金框
+   —— 那里是单块小目标，金框就是「可放置」的提示，I-51 系列断言依赖它。
+   仓库改成**格位自身的描边变色**（虚线的 --line 换成金色），既不是框、又能看出「这里能放」。
+   data-drop="storage" 同时挂在 .store（卡片空白 / 「仓库 n/5」那行文字）、
+   #storage-slots（格位之间的间隙）和每个 .slot.sm 上，所以三处都要收：
+   命中卡片或格位容器 → 所有格位一起亮；命中某个格位 → 只亮那一个。 */
+.store.drop-hot,
+#storage-slots.drop-hot,
+.slot.sm.drop-hot { box-shadow: none; }
+.store.drop-hot .slot.sm,
+#storage-slots.drop-hot .slot.sm,
+.slot.sm.drop-hot { border-color: var(--gold); }
+/* 深色主题下 --gold 仍为 #E8A93B，格位底是 --surface-2（深色），对比充足；
+   这里只补一句「已填格位」的颜色优先级，避免 .slot.filled 的 --ink 描边把它盖掉。 */
+.slot.sm.filled.drop-hot { border-color: var(--gold); }
 
 .ghost {
   position: absolute; width: 76px; height: 76px;
@@ -354,34 +548,34 @@ button:disabled { cursor: default; }
 
 .rcp {
   display: flex; align-items: center; gap: 8px;
-  border: 2px solid var(--line); border-radius: 12px; background: #fff; padding: 4px 10px;
+  border: 2px solid var(--line); border-radius: 12px; background: var(--surface); padding: 4px 10px;
 }
-.rcp.today { border-color: var(--gold); background: #FFFBEF; }
+.rcp.today { border-color: var(--gold); background: var(--surface-accent); }
 .rcp.dim { opacity: .48; }
 .rcp-in { display: flex; align-items: center; gap: 2px; }
-.rcp-in i { font-style: normal; color: #BEB5A2; font-size: 16px; }
+.rcp-in i { font-style: normal; color: var(--faint); font-size: 16px; }
 .mini-ic { width: 38px; height: 38px; display: inline-block; }
-.rcp-eq { color: #BEB5A2; font-weight: 700; font-size: 18px; }
+.rcp-eq { color: var(--faint); font-weight: 700; font-size: 18px; }
 .rcp-out .mini-ic { width: 44px; height: 44px; }
 .rcp-txt { display: flex; flex-direction: column; margin-left: 2px; }
 .rcp-txt b { font-size: 19px; }
-.rcp-txt span { font-size: 14px; color: #A79C87; }
+.rcp-txt span { font-size: 14px; color: var(--muted); }
 .rcp-note {
   margin-left: auto; font-style: normal; font-size: 13px; font-weight: 700;
-  color: #8C7A4E; background: #F6EDD8; border-radius: 6px; padding: 2px 7px; white-space: nowrap;
+  color: var(--warm-ink); background: var(--surface-2); border-radius: 6px; padding: 2px 7px; white-space: nowrap;
 }
 
 .up-row {
   display: flex; align-items: center; gap: 10px;
-  border: 2px solid var(--line); border-radius: 12px; background: #fff; padding: 8px 12px;
+  border: 2px solid var(--line); border-radius: 12px; background: var(--surface); padding: 8px 12px;
 }
 .up-name { display: flex; flex-direction: column; width: 118px; flex: 0 0 118px; }
 .up-name b { font-size: 20px; }
-.up-name span { font-size: 12px; color: #A79C87; line-height: 1.3; }
+.up-name span { font-size: 12px; color: var(--muted); line-height: 1.3; }
 .up-spec { flex: 1; min-width: 0; font-size: 15px; color: var(--ink-2); display: flex; flex-direction: column; line-height: 1.35; }
 .up-spec .refund { font-style: normal; font-size: 12px; color: #B07C2E; }
 .btn {
-  border: 2.5px solid var(--ink); border-radius: 12px; background: #fff;
+  border: 2.5px solid var(--ink); border-radius: 12px; background: var(--surface);
   padding: 8px 18px; font-size: 20px; font-weight: 700; white-space: nowrap;
   box-shadow: 0 2px 0 rgba(43, 43, 43, .14);
   transition: transform .1s, background .15s;
@@ -394,13 +588,17 @@ button:disabled { cursor: default; }
 
 /* ============================================================ 教学条 */
 .tut-banner {
+  /* v2.19.4：纵向内边距 4px → 2px。教程局里这条每高 1px，都是从顾客行的高度里扣的 ——
+     实测它原来占 37px，顾客行只剩 273px，而「气泡 92 + 顾客 170」需要 262px，
+     加上顾客行自身的 16/12 内边距就溢出，气泡顶部被 overflow:hidden 裁掉 21px。
+     字号保持 18px（不能再小，否则手机横屏下看不清），只压内边距。 */
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  background: #FFF3D8; border: 2px solid var(--gold); border-radius: 12px;
-  padding: 4px 12px; font-size: 18px; font-weight: 700; color: #6B4A12;
+  background: var(--surface-accent); border: 2px solid var(--gold); border-radius: 12px;
+  padding: 2px 12px; font-size: 18px; font-weight: 700; color: #6B4A12;
   box-shadow: 0 2px 0 rgba(232, 169, 59, .35); z-index: 2;
 }
 .tut-banner span { flex: 1; }
-.link { font-size: 15px; color: #8C7A4E; text-decoration: underline; white-space: nowrap; }
+.link { font-size: 15px; color: var(--warm-ink); text-decoration: underline; white-space: nowrap; }
 
 /* ============================================================ Toast */
 .toasts {
@@ -448,11 +646,11 @@ button:disabled { cursor: default; }
 .modal-body .p { font-size: 20px; line-height: 1.6; margin: 6px 0; }
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0; }
 .stat-grid.two { grid-template-columns: repeat(2, 1fr); }
-.stat-grid > div { background: #fff; border: 2px solid var(--line); border-radius: 12px; padding: 8px 4px; text-align: center; }
-.stat-grid b { display: block; font-size: 28px; color: var(--ink); }
-.stat-grid span { font-size: 15px; color: #A79C87; }
+.stat-grid > div { background: var(--surface); border: 2px solid var(--line); border-radius: 12px; padding: 8px 4px; text-align: center; }
+.stat-grid b { display: block; font-size: 28px; color: var(--ink-strong); }
+.stat-grid span { font-size: 15px; color: var(--muted); }
 .coinline { margin-top: 8px; font-size: 20px; }
-.coinline b { font-size: 24px; color: var(--ink); }
+.coinline b { font-size: 24px; color: var(--ink-strong); }
 .modal-actions { display: flex; gap: 12px; margin-top: 16px; flex: none; }
 .modal-actions .btn { flex: 1; }
 /* 固定在底部按钮上方的小字说明（不随内容滚动，始终可见） */
@@ -481,14 +679,14 @@ button:disabled { cursor: default; }
 .menu-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .mode-card {
-  text-align: left; border: 2.5px solid var(--ink); border-radius: 16px; background: #fff;
+  text-align: left; border: 2.5px solid var(--ink); border-radius: 16px; background: var(--surface);
   padding: 12px 14px; box-shadow: 0 3px 0 rgba(43, 43, 43, .12);
   transition: border-color .18s, background .18s, transform .1s;
   display: flex; flex-direction: column; min-height: 146px;
 }
 .mode-card b { font-size: 26px; display: block; margin-bottom: 8px; }
 .mode-card p { font-size: 16px; color: var(--ink-2); line-height: 1.55; flex: 1; }
-.mode-card.sel { border-color: var(--gold); background: #FFFBF0; box-shadow: 0 0 0 3px rgba(232, 169, 59, .28); }
+.mode-card.sel { border-color: var(--gold); background: var(--surface-accent); box-shadow: 0 0 0 3px rgba(232, 169, 59, .28); }
 .mode-card.locked { opacity: .5; }
 .mode-card .lock {
   margin-top: 8px; font-style: normal; font-size: 13px; color: var(--red); font-weight: 700;
@@ -496,7 +694,11 @@ button:disabled { cursor: default; }
 }
 .menu-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .menu-actions.single { grid-template-columns: 1fr; }
-.menu-card .hint { font-size: 15px; color: #A79C87; text-align: center; }
+.menu-card .hint { font-size: 15px; color: var(--muted); text-align: center; }
+/* 上一局破产的提示：只在回主页那一刻显示一次，需要比普通提示更醒目 */
+.menu-card .hint.bad { color: #B33E2E; font-weight: 700; margin-bottom: 2px; }
+/* 日结面板里「灶台还剩 N 件」的提醒 */
+.tray-warn { color: #B33E2E; font-weight: 700; }
 
 /* ============================================================ 竖屏提示 */
 #rotate-hint {
@@ -515,13 +717,13 @@ button:disabled { cursor: default; }
 /* 启动错误兜底 */
 .boot-err {
   position: absolute; left: 40px; right: 40px; top: 80px;
-  background: #fff; border: 2px solid var(--red); border-radius: 16px; padding: 24px;
+  background: var(--surface); border: 2px solid var(--red); border-radius: 16px; padding: 24px;
   font-size: 16px; line-height: 1.7;
 }
 .boot-err h2 { font-size: 22px; margin-bottom: 8px; color: var(--red); }
-.boot-err code { background: #F5F1E6; padding: 1px 5px; border-radius: 4px; }
+.boot-err code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
 
-/* 双工位容器 */
+/* 三个合成台的容器：等高均分（v2.18 起食物台 / 甜品台 / 通用台都在这里） */
 .stations { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); }
 
 /* ============================================================ 右栏抽屉（配方书 / 升级） */
@@ -536,13 +738,13 @@ button:disabled { cursor: default; }
 .panel.drawer .mini.icon { padding: 4px 8px; font-size: 15px; }
 .panel-body.single { grid-template-columns: 1fr; gap: 4px; padding: 6px 8px; }
 .rcp-sec {
-  font-size: 12px; font-weight: 800; letter-spacing: 2px; color: #A79C87;
+  font-size: 12px; font-weight: 800; letter-spacing: 2px; color: var(--muted);
   padding: 2px 2px 0; display: flex; align-items: center; gap: 8px;
 }
 .rcp-sec::after { content: ''; flex: 1; height: 2px; background: var(--line); border-radius: 2px; }
 .rcp-sec.on { color: #A8761F; }
 .rcp-sec.on::after { background: #F0D9A8; }
-.rcp-empty { font-size: 14px; color: #A79C87; padding: 4px 2px; }
+.rcp-empty { font-size: 14px; color: var(--muted); padding: 4px 2px; }
 
 .rcp { padding: 3px 6px; display: block; }
 .rcp-main { display: flex; align-items: center; gap: 8px; }
@@ -554,24 +756,24 @@ button:disabled { cursor: default; }
 .rcp-txt span { font-size: 12px; }
 .rcp-note { margin-left: 0; }
 .rcp-pre {
-  margin: 2px 0 0 2px; font-size: 12px; color: #9A8A63;
+  margin: 2px 0 0 2px; font-size: 12px; color: var(--warm-ink);
   border-left: 3px solid #F0D9A8; padding-left: 7px; line-height: 1.35;
 }
 
 .rcp-price {
   margin-left: auto; font-style: normal; font-weight: 800; font-size: 15px;
-  color: #B08A3E; white-space: nowrap;
+  color: var(--warm-ink); white-space: nowrap;
 }
-.rcp-price.mid { font-size: 12px; color: #A79C87; font-weight: 700; }
+.rcp-price.mid { font-size: 12px; color: var(--muted); font-weight: 700; }
 
 /* ============================================================ 营业倒计时 */
 .day-timer {
   display: flex; align-items: center; gap: 8px; height: 42px;
-  border: 2.5px solid var(--ink); border-radius: 999px; background: #fff;
+  border: 2.5px solid var(--ink); border-radius: 999px; background: var(--surface);
   padding: 0 14px 0 12px; box-shadow: 0 2px 0 rgba(43, 43, 43, .12);
   transition: border-color .2s;
 }
-.day-timer .dt-label { font-size: 14px; font-weight: 700; color: #A79C87; letter-spacing: 1px; }
+.day-timer .dt-label { font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: 1px; }
 .day-timer b {
   font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums;
   letter-spacing: .5px; min-width: 62px; text-align: center;
@@ -674,9 +876,6 @@ button:disabled { cursor: default; }
   border-radius: 0 0 4px 0;
 }
 .cat-bubble.show { opacity: 1; transform: translateY(0) scale(1); }
-/* 冷却中的提示略淡，让玩家知道「要等一下」而不是出bug */
-.cat-bubble.cooling { opacity: .85; }
-.cat-bubble.cooling::before { content: 'zzZ '; opacity: .7; }
 
 /* ============================================================ 主菜单：猫猫币与商店入口 */
 .menu-cat { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
@@ -687,13 +886,32 @@ button:disabled { cursor: default; }
 }
 .catbal .ic { width: 24px; height: 24px; flex: 0 0 24px; }
 .catbal b { font-size: 20px; }
+/* 主页的猫币余额已可点（打开「猫猫币怎么赚」），button 需要抹掉浏览器默认的字体与光标 */
+button.catbal { font-family: inherit; cursor: pointer; }
+button.catbal:active { transform: translateY(1px); }
+
+/* 猫猫币获取说明：四行来源清单 */
+.inc-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.inc-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 2px dashed var(--line); border-radius: 12px;
+}
+.inc-ic { flex: 0 0 auto; }
+.inc-ic .ic { width: 30px; height: 30px; }
+.inc-main { flex: 1 1 auto; min-width: 0; }
+.inc-row b { display: block; font-size: 15px; }
+.inc-row i { font-style: normal; font-size: 12px; color: var(--ink-2); }
+.inc-val {
+  flex: 0 0 auto; font-style: normal; font-weight: 800; font-size: 15px;
+  color: var(--ink-strong); white-space: nowrap;
+}
 .shop-btn { display: inline-flex; align-items: center; gap: 6px; }
 .shop-btn .ic { width: 22px; height: 22px; flex: 0 0 22px; }
 
 /* ============================================================ 主题商店 */
 .modal-card h2 { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .modal-card h2 .catbal { margin-left: auto; font-size: 16px; padding: 1px 10px 1px 6px; }
-.modal-body .p.small { font-size: 14px; color: #A79C87; line-height: 1.5; margin-top: 10px; }
+.modal-body .p.small { font-size: 14px; color: var(--muted); line-height: 1.5; margin-top: 10px; }
 
 /* 主题商店：单页陈列 8 套主题（v2.7 起不再有猫咪 / 主题分页，也不单独陈列小猫） */
 .th-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
@@ -721,13 +939,13 @@ button:disabled { cursor: default; }
 .th-name { font-size: 18px; color: var(--ink-strong); }
 .th-card .btn { width: 100%; margin-top: 2px; }
 .th-card .btn:disabled {
-  opacity: 1; background: #EFE9DC; color: #7E7466; border-color: #DDD4C2; box-shadow: none;
+  opacity: 1; background: var(--surface-2); color: var(--muted); border-color: #DDD4C2; box-shadow: none;
 }
 
 /* ============================================================ 周结算：金币换猫猫币 */
 .exchange {
   margin-top: 12px; padding: 10px 12px 8px;
-  border: 2.5px dashed var(--line); border-radius: 14px; background: #FFFDF6;
+  border: 2.5px dashed var(--line); border-radius: 14px; background: var(--surface);
 }
 .ex-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .ex-head b { font-size: 18px; white-space: nowrap; }
@@ -736,22 +954,22 @@ button:disabled { cursor: default; }
 .ex-row .btn.sm { padding: 5px 9px; font-size: 14px; }
 .ex-amount { display: inline-flex; align-items: baseline; gap: 3px; min-width: 82px; justify-content: center; }
 .ex-amount b { font-size: 24px; color: #B3516E; line-height: 1; }
-.ex-amount i { font-style: normal; font-size: 12px; color: #A79C87; }
+.ex-amount i { font-style: normal; font-size: 12px; color: var(--muted); }
 .ex-cost { margin-top: 7px; font-size: 13px; color: var(--ink-2); }
 .ex-tip { margin-top: 2px; font-size: 12.5px; color: var(--red); min-height: 16px; line-height: 1.3; }
 .ex-row #ex-do { margin-left: auto; }
-.ex-row #ex-do:disabled { opacity: .45; background: #fff; color: #A79C87; }
+.ex-row #ex-do:disabled { opacity: .45; background: var(--surface); color: var(--muted); }
 
 /* ============================================================ 天气：墙上的天气牌 + 顾客区氛围层 */
 .qb-board.wx-board {
   width: 98px; height: auto;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: #fff; border: 2.5px solid var(--ink); border-radius: 12px;
+  background: var(--surface); border: 2.5px solid var(--ink); border-radius: 12px;
   padding: 6px 7px 5px; opacity: .97;
   box-shadow: 0 2px 0 rgba(43, 43, 43, .1);
 }
 .wx-board .wx-ic { width: 28px; height: 28px; display: block; }
-.wx-board b { font-size: 13px; line-height: 1.1; color: var(--ink); }
+.wx-board b { font-size: 13px; line-height: 1.1; color: var(--ink-strong); }
 .wx-board i { font-style: normal; font-size: 10px; color: var(--ink-2); text-align: center; line-height: 1.25; }
 
 .wx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
@@ -794,7 +1012,12 @@ button:disabled { cursor: default; }
 
 /* ============================================================ 外卖手机 */
 .phone {
-  position: absolute; left: 10px; top: 46px; width: 74px;
+  /* v2.18：原来 top:46px，手机整个压在第一位顾客的订单气泡上（挡住第一个餐点图标和耐心条）。
+     下移到气泡下沿（气泡底 ≈ y190 舞台坐标）之后再往下放，同时把骑手一起下移，
+     保持「手机在上、骑手在下」的外卖专区结构。
+     宽度 74 → 68：下移后手机的右缘正好顶到第一位顾客的脸（头部左缘 ≈ x93.6），
+     收窄 6px 留出呼吸，不然看起来像贴在客人脸上。 */
+  position: absolute; left: 10px; top: 112px; width: 68px;
   z-index: 3;
   border: 2.5px solid var(--ink); border-radius: 12px;
   background: #2B2B2B; padding: 5px 4px 6px;
@@ -854,11 +1077,28 @@ button:disabled { cursor: default; }
 
 /* ============================================================ 外卖骑手 */
 .rider {
-  position: absolute; left: 10px; top: 188px; /* 手机正下方，形成左侧「外卖专区」 */
-  width: 88px; height: 112px; z-index: 3;
-  cursor: pointer;
+  /* v2.19：骑手改成「和顾客一样」的形态 —— 人物 + 头顶气泡，排在队列最右端。
+     order:9999 保证它排在所有顾客（顾客的 order = 索引）之后；
+     它不在 s.customers 里，纯展示，不参与排队 / 耐心 / 生成逻辑。
+     原来是 absolute 定位在左下角（88×112），改成 flex 成员后高度与顾客一致。 */
+  order: 9999;
+  /* flex 基线与顾客一致（1 1 0），上限 150：队列满员时它和顾客一起等比收窄，
+     不会出现「三个小顾客 + 一个大骑手」的怪比例。 */
+  flex: 1 1 0; min-width: 0; max-width: 150px;
+  height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  z-index: 2; cursor: pointer;
 }
 .rider.hidden { display: none; }
+/* 气泡右上角的「外卖」角标：用蓝色区分于顾客的 VIP 金色角标 */
+.rdr-tag {
+  position: absolute; left: -8px; top: -10px; z-index: 2;
+  background: var(--blue); color: #fff; font-size: 11px; font-weight: 800;
+  padding: 1px 6px; border-radius: 6px; border: 2px solid var(--ink);
+  letter-spacing: .5px; white-space: nowrap;
+}
+/* 骑手沿用顾客的 .figure 尺寸（128:160 / 最大 150 宽）。
+   和顾客同高之后，气泡底边会和其他顾客的气泡落在同一条基线上（骑手气泡少一条耐心条，所以更矮）。 */
 /* v2.8：交付后骑手立即消失，不再播放离场动画 */
 .rider-ic { width: 100%; height: 100%; display: block; }
 .ph-time.hot { color: #F5A623; font-weight: 800; }
@@ -871,7 +1111,7 @@ button:disabled { cursor: default; }
 .set-row span { font-size: 15px; font-weight: 700; }
 .switch {
   min-width: 56px; padding: 5px 12px; border: 2px solid var(--ink); border-radius: 999px;
-  background: #fff; font-size: 13px; font-weight: 700;
+  background: var(--surface); font-size: 13px; font-weight: 700;
 }
 .switch.on { background: var(--gold); color: #3A2600; }
 .set-theme { margin: 12px 0 6px; display: flex; align-items: baseline; gap: 8px; }
@@ -886,9 +1126,9 @@ button:disabled { cursor: default; }
 .set-save-code { margin: 10px 0 6px; }
 .set-save-code textarea {
   width: 100%; box-sizing: border-box; padding: 8px 10px; resize: vertical;
-  border: 2px solid var(--line); border-radius: 10px; background: #fff;
+  border: 2px solid var(--line); border-radius: 10px; background: var(--surface);
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5;
-  color: var(--ink); word-break: break-all;
+  color: var(--ink-strong); word-break: break-all;
 }
 .set-save-note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--ink-2); }
 /* 天气介绍页（v2.9 重排）
@@ -1021,5 +1261,189 @@ body {
   margin: 6px 0; padding: 6px 10px; border-radius: 10px;
   background: rgba(47, 132, 199, .10); border: 1.5px dashed rgba(47, 132, 199, .35);
   font-size: 14px; font-weight: 700; color: #2F84C7;
+}
+
+
+/* ============================================================
+   深色主题特例覆盖
+   上面绝大部分颜色已由 applyTheme() 通过语义变量（--surface /
+   --muted / --faint / --warm-ink …）成套翻转；这里只处理
+   「写死的品牌色 / 状态色」——它们的浅色版本在深底上实测
+   对比度只有 1.2 ~ 3.4，又没法用单个变量表达。
+   浅色主题完全不进这个块，视觉零变化。
+   ============================================================ */
+html[data-theme="dark"] {
+  /* --faint 的深色值在 applyTheme() 里设：内联样式优先级高于本规则，写这里无效 */
+  --red: #F79480;     /* 警示红：原 #D94F3D 在深底上只有 2.7:1 */
+}
+
+/* 教学条：原来用深棕 #6B4A12，深底上几乎看不见（1.17:1） */
+html[data-theme="dark"] .tut-banner { color: #F3DCA6; }
+/* 「今日配方」小标题 */
+html[data-theme="dark"] .rcp-sec.on { color: #F0C674; }
+
+/* 警示语气文字：深红在深底上翻车，统一提亮 */
+html[data-theme="dark"] .rent-pill.tight,
+html[data-theme="dark"] .menu-card .hint.bad,
+html[data-theme="dark"] .tray-warn { color: #F0917E; }
+/* 警示底色：原来的浅粉白在深色主题下是一块刺眼的白 */
+html[data-theme="dark"] .rent-pill.tight,
+html[data-theme="dark"] .day-timer.warn { background: #4A2C34; }
+html[data-theme="dark"] .ing.poor { background: #432A2C; border-color: #8E5B54; }
+
+/* 猫猫币：粉色系文字与底色都要重配，否则粉字在深底上发灰 */
+html[data-theme="dark"] .cat-pill,
+html[data-theme="dark"] .catbal { background: #3C2C3C; }
+html[data-theme="dark"] .cat-pill b,
+html[data-theme="dark"] .catbal,
+html[data-theme="dark"] .catline,
+html[data-theme="dark"] .ex-amount b,
+html[data-theme="dark"] .ach-reward { color: #F2A7BC; }
+
+/* 连击激活态：浅黄底配深棕字，深色主题下要反过来 */
+html[data-theme="dark"] .combo-pill.on { background: #4A3A1E; color: #F5CE8A; }
+
+/* 成就难度徽章：四档色在深底上都偏暗 */
+html[data-theme="dark"] .ach-tier.t-easy { color: #8FC9A0; }
+html[data-theme="dark"] .ach-tier.t-normal { color: #86B9DE; }
+html[data-theme="dark"] .ach-tier.t-hard { color: #E9A855; }
+html[data-theme="dark"] .ach-tier.t-epic { color: #F2A7BC; }
+
+/* ============================================================ 导入存档码弹层
+   取代旧版 window.prompt：文本框常驻、边输边校验、无效时主按钮禁用。
+   字号必须是 16px —— 小于它在 iOS 上聚焦会强制放大整页。 */
+.imp { display: flex; flex-direction: column; gap: 10px; }
+.imp-desc { font-size: 15px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.imp-code {
+  width: 100%; box-sizing: border-box; min-height: 92px; max-height: 180px; resize: vertical;
+  padding: 10px 12px; border: 2px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--ink-strong);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 16px; line-height: 1.45; letter-spacing: .2px;
+}
+.imp-code::placeholder { color: var(--faint); }
+.imp-code:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 169, 59, .22); }
+.imp-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.imp-status { margin: 0; font-size: 15px; line-height: 1.5; min-height: 22px; color: var(--muted); }
+.imp-status.ok { color: #3E8E4E; font-weight: 700; }
+.imp-status.bad { color: #C0392B; font-weight: 700; }
+/* 深色主题下这两档色在深底上只有 3 出头，提亮一档 */
+html[data-theme="dark"] .imp-status.ok { color: #8FC9A0; }
+html[data-theme="dark"] .imp-status.bad { color: #F79480; }
+
+/* ============================================================
+   手机横屏「紧凑档」（v2.20.0）
+   ------------------------------------------------------------
+   判据用**视口高**而不是舞台：#stage 被 transform: scale() 缩放过，
+   而 @media 永远看视口，所以 (max-height: 500px) 恰好只命中手机横屏，
+   桌面（900）/ 平板（768）一条规则都进不来。
+
+   与 main.js 的 FIT 分档同源：视口高 < 500 → FIT.height 从 660 降到 600，
+   缩放系数由 390/660 = 0.591 提到 390/600 = 0.650。逻辑像素 × 0.65 即 844×390 下的物理尺寸。
+
+   为什么 :root 里的令牌必须写 !important：
+   view.js 的 applyLayout() 把 layout.json 的 sizing 写成了 documentElement 的**内联样式**，
+   内联优先级高于任何样式表（含媒体查询）。不加 !important，这里的值不会生效。
+   基准档（视口高 ≥ 500）继续走 layout.json + :root 原值，一个像素都没动。
+   ============================================================ */
+@media (max-height: 500px) {
+  :root {
+    /* HUD 56 → 70：给 54 高的按钮留出落脚空间（物理 45.5，改动前 33） */
+    --hud-h: 70px !important;
+    /* 三个合成台格位 72 → 78（物理 50.7，改动前 42.5；44 的触控底线以上） */
+    --slot: 78px !important;
+    --uni-slot: 78px !important;
+    /* 仓库格位 64 → 68（物理 44.2，改动前 37.8） */
+    --store-slot: 68px !important;
+    /* 仓储行 96 → 94：舞台矮了 60、HUD 又高了 14，这两笔账全落在「客区 + 三个台子」上。
+       仓储行只需装下 68 的格位（94 − 内边距 2 − 标题行 ≈ 21 = 71），省下的 2 给客区。
+       食材区 --ings-h 保持 128（不动）：它是 14 个食材键的高度来源，
+       116 会让每个键掉到 35.8 物理高，而保持 128 时是 39.7 + 热区 = 44.85，
+       刚好守住 44 —— 食材键是全站最高频的点击数，不能让位给顾客图。 */
+    --shelf-h: 94px !important;
+  }
+
+  /* ---- HUD 按钮：40 → 54（物理 35.1），再叠一圈纵向透明热区补到 44 ---- */
+  .act { height: 54px; }
+  /* 54 + 2×7 = 68 逻辑 → 44.2 物理。横向只放 -4px：HUD 三个按钮相邻（间距 8），
+     横扩再多会让两个按钮的热区互相抢点击。 */
+  .act::after { inset: -7px -4px; }
+
+  /* ---- 顾客气泡右上角的「×」：24×24 → 40×40（物理 26，改动前 14.2） ---- */
+  .dismiss {
+    width: 40px; height: 40px; right: -12px; top: -10px;
+    font-size: 20px;
+    /* v2.20.0 修复（QA 实测回归）：× 放大到 40 且 right:-12 后，它的**中心**从
+       「订单行右缘之外」挪到了「之内」，而 .order 里的 .ord 是 position:relative、
+       又排在 DOM 后面 —— 同为 z-index:auto 的定位元素按文档顺序绘制，
+       于是 × 被订单图标 SVG 盖住：elementFromPoint(×中心) 返回图标，
+       中心那一块点下去什么都不会发生（实测 39.3% 面积是死区）。
+       给按钮一个 z-index 是**结构上正确**的修法（按钮本来就该在图标之上），
+       比把 right 再挪出去更稳 —— 挪偏移只是把死区换到另一个尺寸上重犯。
+       基准档（24×24 / right:-10）中心本来就在图标之外，故只在紧凑档加。 */
+    z-index: 2;
+  }
+  /* 40 + 2×10 = 60 逻辑 → 39 物理。热区**不对称**：上 4 / 下 16 / 左右各 10。
+     原因：× 贴在气泡右上角、气泡又贴着客区顶边，向上扩的热区会被 .cust-row 的
+     overflow:hidden 裁掉（看不见但也没用）；向下扩不会 —— 气泡右侧的下半部分是空的，
+     订单图标右缘在 157、× 的左缘在 168，横向扩 10 也还差 1px 才碰到图标。
+     44 物理需要 68 逻辑的热区，那会把热区压到订单图标上。
+     【已裁决】39 到此为止，不再往 44 凑：× 是破坏性操作（点错就取消一单），
+     热区盖住订单图标会同时抢顾客的拖放命中区、抬高误取消概率 —— 收益递减、风险递增。 */
+  .dismiss::after { inset: -4px -10px -16px -10px; }
+
+  /* ---- 食材键：61 高 → 物理 39.7，靠纵向热区补到 44.85 ----
+     14 个食材键是「可点元素 < 44px」里数量最多的一类，它们的高度由
+     --ings-h 均分决定、不能单独拉高（拉高就要从客区抢 14px），所以同样只扩热区。 */
+  .ing::after { inset: -4px -3px; }
+
+  /* ---- 客区：紧凑档比基准档矮 74 逻辑（HUD +14、舞台 −60），
+          把 queue / cust-row / 气泡的内边距各收一点，把空间还给顾客与气泡 ---- */
+  .queue { padding: 4px 10px 6px; }
+  /* 上内边距 2 → 14：气泡右上角有两个「探出气泡框」的装饰 —— VIP / 外卖角标（top:-10）
+     与 ×（top:-10）。基准档客区高 314，气泡顶离客区顶有 16.5 逻辑的余量，探出也不会被裁；
+     紧凑档只剩 250，按原来的 2px 内边距会被 overflow:hidden 削掉角标的上半边（实测 VIP 角标
+     被削 6.2、× 被削 9.2）。这里把这 12 逻辑还给顶部，由可缩的顾客图独自让位。 */
+  .cust-row { padding: 14px 86px 4px 14px; }
+  .bubble { padding: 3px 7px 5px; }
+  .pbar { margin-top: 4px; }
+  .tut-banner { padding: 1px 10px; font-size: 17px; }
+  /* 气泡高度由内容决定（订单 56 + 耐心条 8 + 内边距），绝不能被 flex 压扁 ——
+     压缩必须由 .figure 独自吸收，否则气泡内容会溢出气泡框、再被 .cust-row 的
+     overflow:hidden 裁掉（v2.19.4 修过一次同类问题）。 */
+  .bubble { flex: 0 0 auto; }
+  /* 顾客可以被压矮：min-height:auto 会让 flex item 停在「内容最小尺寸」（= aspect-ratio
+     算出的 187.5），压不动 —— 紧凑档客区只剩 ~253 逻辑，气泡 90 + 187.5 必然溢出。
+     设 min-height:0 后由 .figure 独自让位，里面的 SVG 按 preserveAspectRatio 等比缩小，
+     人物比例不变（物理高度 163×0.65 ≈ 106，改动前 187.5×0.591 ≈ 111，只小 4%）。 */
+  .figure { min-height: 0; }
+
+  /* ---- 合成台：舞台矮了 60，三台均分后只剩 116.7 逻辑，必须把台内固定开销压薄，
+          78 的格位才装得下（不裁切）。逐项算过：
+          边框 5 + 内边距 4 + 标题行 18.9 + .st-body padding-top 0 + 进度条 6 = 33.9，
+          116.7 − 33.9 = 82.8 ≥ 78，上下各留 2.4 逻辑余量（物理 1.55）。
+          这些值都是「字号 × 行高倍数 / 固定 px」，不随字体变化，余量是确定的。
+          .stations 的间距**保持 --gap(8)**：它是 layout.json 的权威值，
+          tools/qa-geom-verify.mjs 会用「Σ三台 + 2×gap ≈ op 高」交叉验证纵向是否拉满，
+          这里改间距会让那条既有断言变红（而且判定本身是对的）。 ---- */
+  .station { padding: 2px 10px; }
+  .st-name { font-size: 18px; line-height: 1.05; }
+  .st-body { padding-top: 0; }
+  .st-bar { height: 6px; margin-top: 0; }
+
+  /* ---- HUD 左区收紧一档：紧凑档舞台更窄（844×390 时 1298 vs 1428 逻辑），
+          .hud-left 是 overflow:hidden，不收就会把连击胶囊裁掉 ---- */
+  .hud-day { font-size: 17px; }
+  .day-timer { height: 38px; padding: 0 11px 0 9px; }
+  .day-timer b { font-size: 22px; min-width: 54px; }
+  .day-timer .dt-label { font-size: 12px; }
+  .dt-bar { width: 44px; }
+  .coin-pill b { font-size: 23px; }
+  .cat-pill b { font-size: 23px; }
+  .combo-pill { font-size: 15px; padding: 2px 9px; }
+  .mode-tag { font-size: 15px; padding: 2px 8px; }
+  .act { font-size: 16px; padding: 0 9px; }
+  .act .ic { width: 18px; height: 18px; }
+  .rent-pill { height: 38px; font-size: 16px; }
 }
 

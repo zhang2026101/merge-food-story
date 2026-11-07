@@ -1,6 +1,6 @@
 {
   "name": "merge-food-story",
-  "version": "2.13.0",
+  "version": "2.20.1",
   "private": true,
   "description": "食合物语 / Merge Food Story —— 休闲经营 + 手操烹饪网页游戏（PWA）",
   "type": "module",

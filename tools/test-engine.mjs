@@ -134,21 +134,32 @@ section('AC-04 主仓储上限', () => {
   eq('AC-04c', () => g.s.stations.food.output.key, 'burger', '物品留在输出槽');
 });
 
-section('AC-05 / AC-11 / AC-18 垃圾桶', () => {
+section('AC-05 / AC-11 / AC-18 垃圾桶：无冷却 + 丢弃返还', () => {
   const g = newGame();
   g.s.storage.push(g.mkItem('burger'));
   g.s.storage.push(g.mkItem('burger'));
   eq('AC-05a', g.moveItem(loc('storage', null, 0), { zone: 'trash' }).ok, true, '首次丢弃成功');
-  eq('AC-05b', g.moveItem(loc('storage', null, 0), { zone: 'trash' }).reason, 'cooldown', '冷却中拒绝');
+  eq('AC-05b', g.moveItem(loc('storage', null, 0), { zone: 'trash' }).ok, true, '紧接着再丢也成功（冷却已移除）');
   g.s.stations.food.output = g.mkItem('fail');
-  eq('AC-18', g.moveItem(loc('output', 'food'), { zone: 'trash' }).ok, true, '失败品免冷却');
-  eq('AC-11', g.trashCdMs, 1500, 'Lv1 = 1500ms');
+  eq('AC-18', g.moveItem(loc('output', 'food'), { zone: 'trash' }).ok, true, '失败品随时可丢');
+  eq('AC-11', g.trashRefundRate, 0, 'Lv1 不返还');
   g.s.coins = 500;
   g.upgrade('trash');
-  eq('AC-11b', g.trashCdMs, 1000, 'Lv2 = 1000ms');
+  eq('AC-11b', g.trashRefundRate, 0.2, 'Lv2 = 20%');
   g.upgrade('trash');
-  eq('AC-11c', g.trashCdMs, 400, 'Lv3 = 400ms');
-  eq('AC-11d', g.upgrade('trash').reason, 'max', 'Lv3 满级');
+  eq('AC-11c', g.trashRefundRate, 0.4, 'Lv3 = 40%');
+  g.upgrade('trash');
+  eq('AC-11e', g.trashRefundRate, 0.6, 'Lv4 = 60%');
+  eq('AC-11d', g.upgrade('trash').reason, 'max', 'Lv4 满级');
+  // 返还额 = 物品成本 × 返还率（汉堡 chainCost 3 × 60% = 1.8 → 向下取整 1）
+  const before = g.s.coins;
+  g.s.storage.push(g.mkItem('burger'));
+  const ret = g.moveItem(loc('storage', null, 0), { zone: 'trash' });
+  eq('AC-11f', [ret.refund, g.s.coins - before], [1, 1], 'Lv4 丢汉堡返还 1 金币');
+  // 失败品没有成本 → 不返还
+  g.s.stations.food.output = g.mkItem('fail');
+  const ret2 = g.moveItem(loc('output', 'food'), { zone: 'trash' });
+  eq('AC-11g', ret2.refund, 0, '失败品成本为 0，不返还');
 });
 
 section('AC-06 成交结算公式', () => {
@@ -198,17 +209,18 @@ section('AC-10 金币不足', () => {
   eq('AC-10b', g.s.stations.food.inputs.filter(Boolean).length, 1, '只放入面包');
 });
 
-section('AC-12 / AC-13 升级返还', () => {
+section('AC-12 / AC-13 升级扣费（返还机制已移除）', () => {
   const g = newGame();
   g.s.coins = 1000;
   g.upgrade('stove');
-  eq('AC-12a', g.s.coins, 950, 'Lv1→Lv2 扣50返0');
+  eq('AC-12a', g.s.coins, 950, 'Lv1→Lv2 扣 50');
   g.upgrade('stove');
-  eq('AC-13a', g.s.coins, 875, 'Lv2→Lv3 扣100返25');
+  eq('AC-13a', g.s.coins, 850, 'Lv2→Lv3 扣 100（全额，无返还）');
   g.upgrade('stove');
-  eq('AC-13b', g.s.coins, 770, 'Lv3→Lv4 扣180返75');
-  eq('AC-13c', g.stoveMs, 740, '炉灶 Lv4 = 740ms');
+  eq('AC-13b', g.s.coins, 670, 'Lv3→Lv4 扣 180（全额，无返还）');
+  eq('AC-13c', g.stoveMs, 614, '炉灶 Lv4 = 614ms（v2.19.3：每级 -20%）');
   eq('AC-12b', g.upgrade('stove').reason, 'max');
+  eq('AC-13d', g.deviceInfo('stove').refund, undefined, 'deviceInfo 不再返回返还额');
 });
 
 section('AC-14 无序匹配', () => {
@@ -267,14 +279,14 @@ section('AC-17 / AC-22 / AC-49 确定性与节奏', () => {
   const g = new Game(ctx);
   g.tutorialDone = true;
   g.newRun('hard', 1);
-  eq('AC-22a', g.s.spawnInterval, Math.max(6000, Math.round(90000 / 11)), '困难到店间隔 = 90000/11');
-  eq('AC-22b', g.s.perDay, 11, '困难 11 单');
+  eq('AC-22a', g.s.spawnInterval, Math.max(6000, Math.round(90000 / 13)), '困难到店间隔 = 90000/13');
+  eq('AC-22b', g.s.perDay, 13, '困难 13 单（v2.19.3：顾客密度上调）');
   const f = new Game(ctx);
   f.tutorialDone = true;
   f.newRun('normal', 1);
   eq('AC-49a', f.s.dayDuration, 90000, '普通单日 90s');
-  eq('AC-49b', f.s.spawnInterval, 10000, '到店间隔 = 90000/9');
-  eq('AC-49c', f.s.perDay, 9, '普通 9 单');
+  eq('AC-49b', f.s.spawnInterval, Math.round(90000 / 11), '到店间隔 = 90000/11');
+  eq('AC-49c', f.s.perDay, 11, '普通 11 单（v2.19.3：顾客密度上调）');
 });
 
 section('AC-19 中间产物提速', () => {
@@ -300,20 +312,32 @@ section('AC-21 困难耐心', () => {
   }
   const base = ctx.config.customer.basePatienceMs * 0.85; // 42000 × 0.85 × 招牌 1.0
   eq('AC-21', () => Math.round(c.patienceMax), Math.round(base), '困难耐心 = 42000 × 0.85');
-  eq('AC-21b', g.rentForWeek(1), 150, '困难房租 ×1.0');
+  eq('AC-21b', g.rentForWeek(1), 480, '困难房租 = 基准 400 × 1.2');
 });
 
 section('AC-23 / AC-44 食材区', () => {
   const g = newGame();
   eq('AC-23', Object.keys(ctx.config.ingredients).length, 14, '14 种叶食材（冰淇淋改为成品）');
   const leaves = g.menuLeaves();
-  // 当日菜单（普通第1周第1天，种子确定）：食物 burger/pizza/fries，饮品 cola/iceCream/tea
-  ok('AC-44', () => leaves.has('potato'), '菜单含薯条 → 土豆必须点亮');
-  ok('AC-44b', () => leaves.has('bread') && leaves.has('patty'), '菜单含汉堡 → 面包/肉饼点亮');
-  ok('AC-44c', () => leaves.has('dough') && leaves.has('ketchup'), '菜单含披萨 → 面团/番茄酱点亮');
-  ok('AC-44d', () => !leaves.has('tomato') && !leaves.has('lettuce'), '不在菜单的沙拉系食材必须置灰');
-  ok('AC-44e', () => !leaves.has('coffeeBean'), '不在菜单的咖啡豆必须置灰');
-  eq('AC-44f', leaves.size, 10, '当日相关叶子恰好 10 种');
+
+  // v2.17.1：当日菜单改为从更大的池子里抽，不再写死「今天一定有披萨 / 一定没咖啡」。
+  // 判据改成：用测试自己的递归（独立于引擎实现）从菜单反推叶食材，再与 menuLeaves() 对拍。
+  // 「菜单里有的必须点亮、没有的必须置灰」的原意一条不少，也不会因池子调整变成假红。
+  const leafWalk = (id, depth = 0) => {
+    const rec = ctx.byId.get(id);
+    if (!rec) return ctx.config.ingredients[id] != null ? [id] : [];
+    if (depth > 6) return [];
+    return (rec.inputs || []).flatMap((k) => leafWalk(k, depth + 1));
+  };
+  const want = new Set();
+  for (const id of [...g.s.menu.foods, ...g.s.menu.drinks]) leafWalk(id).forEach((k) => want.add(k));
+
+  eq('AC-44', () => [...leaves].sort(), [...want].sort(), '点亮集合 == 当日菜单所有菜的叶食材并集（引擎 walker 与测试 walker 对拍）');
+  ok('AC-44b', () => leaves.has('bread') && leaves.has('patty'), '普通模式主菜是汉堡 → 面包/肉饼点亮');
+  ok('AC-44c', () => g.s.menu.foods.every((id) => leafWalk(id).every((k) => leaves.has(k))), '菜单里每道主食的叶食材都点亮了');
+  ok('AC-44d', () => Object.keys(ctx.config.ingredients).filter((k) => !want.has(k)).every((k) => !leaves.has(k)), '不在菜单链上的叶食材全部置灰');
+  ok('AC-44e', () => g.s.menu.drinks.every((id) => leafWalk(id).every((k) => leaves.has(k))), '菜单里每款饮品的叶食材都点亮了');
+  eq('AC-44f', () => leaves.size, want.size, '当日相关叶子数量与反推结果一致');
 });
 
 section('AC-24 单一仓库（5 格，不分类）', () => {
@@ -375,8 +399,9 @@ section('AC-32 暂停（耐心 / 生成 / 倒计时 / 读条 四者全冻结）'
 section('AC-34 / AC-35 / AC-36 / AC-43 / AC-48 周结算', () => {
   const g = newGame();
   g.s.week = 1;
-  g.s.weekStartCoins = 200;
-  g.s.coins = 200;
+  // 房租上调后 200 会被判破产，这里给足钱，让本组专测「回收 / 房租数值」而不是破产分支
+  g.s.weekStartCoins = 1000;
+  g.s.coins = 1000;
   g.s.storage.push(g.mkItem('burger'), g.mkItem('pizza'), g.mkItem('burger'));
   craft(g, ['lettuce', 'patty']);
   g.moveItem(loc('output', 'food'), loc('storage'));
@@ -384,9 +409,9 @@ section('AC-34 / AC-35 / AC-36 / AC-43 / AC-48 周结算', () => {
   // 回收 = 8×25% + 12×25% + 8×25% = 2+3+2 = 7；菜肉饼（半成品）回收 0
   eq('AC-35a', g.s.weekStats.recycled, 7, '残余 25% 回收');
   eq('AC-35b', g.s.storage.length, 0, '仓储清空');
-  eq('AC-43a', g.s.weekStats.rent, 150, '第1周房租150');
-  eq('AC-43b', g.rentForWeek(2), 240, '第2周240');
-  eq('AC-43c', [g.rentForWeek(3), g.rentForWeek(4), g.rentForWeek(99)], [330, 330, 330], '第3周起（含边界 3/4/99）都是 330');
+  eq('AC-43a', g.s.weekStats.rent, 400, '第1周房租 400');
+  eq('AC-43b', g.rentForWeek(2), 800, '第2周 800（v2.19.3：房租曲线拉陡）');
+  eq('AC-43c', [g.rentForWeek(3), g.rentForWeek(4), g.rentForWeek(99)], [1300, 1300, 1300], '第3周起（含边界 3/4/99）都是 1300');
   eq('AC-35c', g.s.phase, 'weekEnd');
 
   // AC-48：单独用「仅成品」与「成品+半成品」两种场景求差，才是真的在测「半成品回收 0」
@@ -411,14 +436,13 @@ section('AC-34 / AC-35 / AC-36 / AC-43 / AC-48 周结算', () => {
 
   const b = newGame();
   b.s.weekStartCoins = 60;
-  b.s.coins = 100; // 100 - 150 < 0
+  b.s.coins = 100; // 100 + 回收 − 150 < 0
   b.s.storage.push(b.mkItem('burger'));
   b.endWeek();
   eq('AC-34a', b.s.phase, 'bankrupt', '触发破产');
-  b.retryWeek();
-  eq('AC-34b', b.s.coins, 60, '金币回周初值');
-  eq('AC-34c', b.s.week, 1, '重开本周');
-  eq('AC-34d', b.s.day, 1);
+  eq('AC-34b', () => b.s.coins < 0, true, '破产后金币为负（不再回退到周初）');
+  eq('AC-34c', () => b.s.lastSettle.shortfall, () => Math.round(-b.s.coins), '清算差额 = 缺口');
+  eq('AC-34d', typeof b.retryWeek, 'undefined', '「重开本周」已彻底移除');
 });
 
 section('AC-39 收银台 / 招牌', () => {
@@ -582,6 +606,40 @@ section('S1 跨日时间轴：s.time 必须逐日归零', () => {
   eq('S1-p', () => g.s.deliveries.map((d) => d.status), ['scheduled'], '第 7 天外卖同样是 scheduled');
 });
 
+// ================================================================ 隔天清台
+section('S5 隔天只保仓库：灶台物品清零', () => {
+  const g = newGame();
+  g.s.weekWeather = ['sunny', 'sunny', 'sunny', 'sunny', 'sunny', 'sunny', 'sunny'];
+  g.s.weekWeatherWeek = g.s.week;
+  g.startDay(1);
+  g.s.storage.push(g.mkItem('burger'));
+  g.s.stations.food.inputs[0] = g.mkItem('bread');
+  g.s.stations.food.output = g.mkItem('burger');
+  g.s.stations.drink.inputs[0] = g.mkItem('water');
+  g.s.stations.drink.busy = true;
+  g.s.stations.drink.pendingId = 'cola';
+  g.s.stations.drink.progress = 300;
+  g.s.stations.drink.duration = 1200;
+  g.s.phase = 'dayEnd';
+  g.nextDay();
+  eq('S5-a', () => g.s.storage.map((i) => i.key), ['burger'], '仓库物品保留到第二天');
+  eq('S5-b', () => g.s.stations.food.inputs.map((i) => i && i.key), [null, null], '食物台输入格清空');
+  eq('S5-c', () => g.s.stations.food.output, null, '食物台输出槽清空');
+  eq('S5-d', () => [g.s.stations.drink.inputs[0], g.s.stations.drink.busy, g.s.stations.drink.pendingId, g.s.stations.drink.progress], [null, false, null, 0], '饮品台读条与输入一并清空');
+  eq('S5-e', () => g.s.dayStats.waste, 0, '清台不计浪费');
+
+  // 同一天的存档仍然完整：resume() 在 startDay 之后用工位快照覆盖，不该被「清台」误伤
+  const g2 = newGame();
+  g2.startDay(3);
+  g2.s.stations.food.output = g2.mkItem('burger');
+  g2.s.stations.food.inputs[1] = g2.mkItem('patty');
+  const snap = g2.snapshot();
+  const g3 = new Game(ctx);
+  g3.resume(snap);
+  eq('S5-f', () => g3.s.stations.food.output && g3.s.stations.food.output.key, 'burger', '同日读档仍恢复输出槽');
+  eq('S5-g', () => g3.s.stations.food.inputs[1] && g3.s.stations.food.inputs[1].key, 'patty', '同日读档仍恢复输入格');
+});
+
 // ================================================================ 存档往返（S4③）
 section('S4 存档快照 → 恢复往返等价', () => {
   const g = newGame();
@@ -640,7 +698,7 @@ section('S4 脏存档：不崩 + 钳位 + 丢弃非法数据', () => {
   };
   const g = new Game(ctx);
   ok('S4③-a', () => g.resume(dirty) === true, '脏存档不抛错且返回 true');
-  eq('S4③-b', () => g.s.devices, { stove: 4, counter: 1, sign: 1, trash: 3 }, '设备等级钳位到合法区间');
+  eq('S4③-b', () => g.s.devices, { stove: 4, counter: 1, sign: 1, trash: 4 }, '设备等级钳位到合法区间（垃圾桶已扩到 4 级）');
   eq('S4③-c', () => g.s.storage.map((x) => x.key), ['burger'], '非法物品被丢弃');
   eq('S4③-d', () => g.s.stations.food.busy, false, '缺 pendingId 的 busy 被纠正（避免永久卡死）');
   eq('S4③-e', () => g.s.customers.length, 1, '非法订单的顾客被丢弃');
@@ -1042,11 +1100,17 @@ section('AC-53 天气系统（含订单权重）', () => {
 
   // 端到端（真正走 spawnCustomer）：同种子同天数，热浪天顾客订单里的冷饮占比应显著高于多云天
   // 变异测试：若 spawnCustomer 改回均匀抽样，本条必然变红。
+  //
+  // v2.17.1：菜单池扩到 7 款饮品后，这一天（同种子）抽到的三款恰好全是冷饮
+  // （cola/iceCream/icedTea），于是「冷饮占比」两边恒为 100%，这条断言会被空跑成假绿。
+  // 这里把当日饮品固定成一冷一热（与上面 AC-53af 的抽样列表一致），
+  // 让判据只依赖「天气权重 → 订单」这条链路，不依赖当天抽到哪几款。
   const coldShare = (weather) => {
     const g = newGame();
     g.s.weekWeather = [weather, weather, weather, weather, weather, weather, weather];
     g.s.weekWeatherWeek = g.s.week;
     g.startDay(3);          // 同一天 → 同一 rng 种子 → 随机流对齐
+    g.s.menu = { ...g.s.menu, drinks: ['cola', 'coffee'] };
     g.s.customers = [];
     let cold = 0;
     let total = 0;
@@ -1125,7 +1189,7 @@ section('AC-54 外卖系统（真实时间流）：10 秒预警 → 到店 → �
   eq('AC-54q2', ctx.config.delivery.deliveredMul, 2, '配置 deliveredMul = 2');
   ok('AC-54r', d.earned > 0, `外卖收益 ${d.earned} > 0`);
   eq('AC-54t', r.s.dayStats.deliveryServed, 1, '日统计记 1 单');
-  eq('AC-54u', r.s.dayStats.deliveryCatCoins, 1, '实际交付 +1 猫币');
+  eq('AC-54u', r.s.dayStats.deliveryCatCoins, undefined, '外卖不再有猫币分项（该字段已随机制移除）');
   eq('AC-54u1', r.s.ach.deliveries, 1, '成就埋点 deliveries +1');
 
   // 精确数字：把 item 固定成汉堡（base=8），收银台 Lv1（100%），到店立即取走
@@ -1182,7 +1246,7 @@ section('AC-54 外卖系统（真实时间流）：10 秒预警 → 到店 → �
   eq('AC-54ag', () => d3.earned, expectedDeliveryEarn(x, d3, x.s.time, { delivered: true }), '跨天已提交单按送达口径（双倍）');
   eq('AC-54ah', x.s.dayStats.deliveryServed, 1, '已提交跨天单记 deliveryServed');
   eq('AC-54ai', x.s.dayStats.deliveryPending, 1, '从未交付的那单记 deliveryPending');
-  eq('AC-54aj', catsX.filter((y) => y.reason === 'delivery').length, 1, '已提交跨天单照发 1 猫币');
+  eq('AC-54aj', catsX.filter((y) => y.reason === 'delivery').length, 0, '跨天送达同样不发外卖猫币（口径与主页说明一致）');
   eq('AC-54ak', x.s.ach.crossDay, 1, '跨天埋点 crossDay +1');
   eq('AC-54al', x.s.ach.deliveries, 1, '已提交跨天单计入 deliveries');
 
@@ -1388,10 +1452,35 @@ section('AC-56 成就分级与新增成就（v2.8）', () => {
   d7.bumpCounter('revenue', 1000);
   ok('AC-56q', d7.checkAchievements('day', { unlocked: [], totals: { revenue: 4500 } }).some((x) => x.id === 'ach_revenue_5000'), '累计营业额 ≥5000 解锁「流水五千」');
 
-  // 8) 累计 30 猫猫币
+  // 8) 累计 30 猫猫币（阈值外置在 config.achievements.thresholds.catCoins，默认 30）
   const d8 = newGame();
-  ok('AC-56r', d8.checkAchievements('day', { unlocked: [], totals: { catCoins: 30 } }).some((x) => x.id === 'ach_cat_30'), '累计 30 猫币解锁「猫猫大户」');
-  eq('AC-56s', d8.checkAchievements('day', { unlocked: [], totals: { catCoins: 29 } }).some((x) => x.id === 'ach_cat_30'), false, '29 猫币不解锁');
+  ok('AC-56r', d8.checkAchievements('day', { unlocked: [], totals: { catCoins: 30 } }).some((x) => x.id === 'ach_cat_30'), '往局累计 30 猫币解锁「猫猫大户」');
+  eq('AC-56s', d8.checkAchievements('day', { unlocked: [], totals: { catCoins: 29 } }).some((x) => x.id === 'ach_cat_30'), false, '往局 29 猫币不解锁');
+
+  // 8b) 本局累计（s.catEarned）也必须计入 —— 这条钉死「死成就」修复：
+  //     旧判定只看 tot.catCoins，而该计数器从未被 main.js 累加过，成就永不可达。
+  const d8b = newGame();
+  d8b.s.catEarned = 30;
+  ok('AC-56z1', d8b.checkAchievements('day', { unlocked: [], totals: {} }).some((x) => x.id === 'ach_cat_30'), '本局累计 30 枚猫币即解锁（不必等下一局 flush）');
+  const d8c = newGame();
+  d8c.s.catEarned = 29;
+  eq('AC-56z2', d8c.checkAchievements('day', { unlocked: [], totals: {} }).some((x) => x.id === 'ach_cat_30'), false, '本局累计 29 枚不解锁');
+  const d8d = newGame();
+  d8d.s.catEarned = 20;
+  ok('AC-56z3', d8d.checkAchievements('day', { unlocked: [], totals: { catCoins: 10 } }).some((x) => x.id === 'ach_cat_30'), '往局 10 + 本局 20 = 30 枚解锁（跨局累加口径）');
+
+  // 8c) 端到端：走真实日结路径（endDay 每开一天 +10 猫币，顺序是「先发币再判成就」），
+  //     普通模式连开 3 天 = 本局 30 枚 → 第 3 天日结当场解锁。
+  const d8e = newGame();
+  const unlockedIds = [];
+  d8e.on('achievement', (list) => { for (const a of list) unlockedIds.push(a.id); });
+  for (let day = 1; day <= 3; day++) {
+    d8e.s.day = day;
+    d8e.s.phase = 'day';
+    d8e.endDay();
+  }
+  eq('AC-56z4', d8e.s.catEarned, 30, '普通模式连开 3 天累计 30 枚猫币（每日 +10）');
+  ok('AC-56z5', unlockedIds.includes('ach_cat_30'), '真实日结路径下「猫猫大户」确实解锁（不是只在测试里塞字段才可达）');
 
   // 9) 热浪天 8 单
   const d9 = newGame();
@@ -1441,8 +1530,8 @@ section('AC-09 / AC-27 / AC-28 / AC-29 / AC-38 / AC-47 补齐的 AC 编号', () 
   // AC-27 / AC-28：模式说明文案（仓储口径以 config 为准，PRD 里的 6/8 格已过时）
   const normalHint = ctx.i18n['mode.hint.normal'];
   const hardHint = ctx.i18n['mode.hint.hard'];
-  ok('AC-27', () => /汉堡免生菜/.test(normalHint) && /不加冰/.test(normalHint) && /仓储 5 格/.test(normalHint), `普通说明：${normalHint}`);
-  ok('AC-28', () => /招牌汉堡/.test(hardHint) && /加冰/.test(hardHint) && /耐心更短/.test(hardHint) && /仓储 5 格/.test(hardHint), `困难说明：${hardHint}`);
+  ok('AC-27', () => /汉堡免生菜/.test(normalHint) && /不加冰/.test(normalHint) && !/仓储/.test(normalHint), `普通说明（不提仓储格数）：${normalHint}`);
+  ok('AC-28', () => /招牌汉堡/.test(hardHint) && /加冰/.test(hardHint) && /耐心更短/.test(hardHint) && !/仓储/.test(hardHint), `困难说明（不提仓储格数）：${hardHint}`);
 
   // AC-29：首次进入＝教学单，且可跳过
   const t = new Game(ctx);
@@ -1453,16 +1542,16 @@ section('AC-09 / AC-27 / AC-28 / AC-29 / AC-38 / AC-47 补齐的 AC 编号', () 
   t.skipTutorial();
   eq('AC-29c', () => [t.s.tutorial.active, t.tutorialDone], [false, true], '跳过教学后状态收尾');
 
-  // AC-38 / AC-47：升级返还款标注（累计已投入 × 50%）+ 首级无返还
+  // AC-38 / AC-47：升级面板改成「作用 + 现在 → 下一级」，时间折成秒
   const u = newGame();
   const info1 = u.deviceInfo('stove');
-  eq('AC-38', () => [info1.lv, info1.cost, info1.refund], [1, 50, 0], 'Lv1→Lv2：费用 50、返还 0');
-  eq('AC-47', () => ctx.i18n['upgrade.noRefundFirst'], '首级无返还', 'Lv1 面板标注「首级无返还」');
+  eq('AC-38', () => [info1.lv, info1.cost], [1, 50], 'Lv1→Lv2：费用 50');
+  eq('AC-47', () => ctx.i18n['upgrade.stove.what'], '出餐更快', '面板作用说明是中文短句');
   u.s.coins = 1000;
   u.upgrade('stove');
   const info2 = u.deviceInfo('stove');
-  eq('AC-38b', () => info2.refund, Math.floor(50 * ctx.config.devices.refund.rate), 'Lv2→Lv3 返还 = 累计 50 × 50% = 25');
-  ok('AC-38c', () => /返/.test(ctx.i18n['upgrade.refund']), `返还文案：${ctx.i18n['upgrade.refund']}`);
+  eq('AC-38b', () => [info2.cur, info2.next], [960, 768], 'Lv2 面板要显示的「现在 → 下一级」');
+  ok('AC-38c', () => /秒/.test(ctx.i18n['upgrade.sec']) && !/ms|毫秒/.test(ctx.i18n['upgrade.sec']), `时间单位用秒：${ctx.i18n['upgrade.sec']}`);
 });
 
 section('R4 配置缺失一律显式报错（与 deliverySettleMs 同一策略）', () => {
@@ -1575,9 +1664,314 @@ section('S2 离线资产完整性（sw.js SHELL ⊇ 实际依赖）', () => {
   ok('S2-e', () => assets.size >= 10 && assets.has('./src/style.css') && assets.has('./src/audio.js'), `静态依赖图抓到 ${assets.size} 个资产（含 style.css / audio.js）`);
   eq('S2-a', missing, [], 'sw.js SHELL 覆盖 index.html + import 图 + manifest 图标（缺失项列在此）');
   ok('S2-b', () => shell.has('./src/audio.js'), 'SHELL 含 ./src/audio.js');
-  ok('S2-c', () => /const CACHE = 'owk-v31'/.test(sw), '缓存名已升到 owk-v31');
+  // 不写死版本号（同一个坑踩过三次）：只要求 CACHE 存在且是 owk-vNN 形态，
+  // 具体版本号由 npm run test:browser 的 pwa-check 与磁盘 sw.js 对比。
+  ok('S2-c', () => /const CACHE = 'owk-v\d+'/.test(sw), `缓存名是 owk-vNN 形态（当前 ${(/const CACHE = '([^']+)'/.exec(sw) || [])[1]}）`);
   ok('S2-d', () => /res\.ok/.test(sw), '运行时回填只缓存成功响应');
   for (const a of assets) ok(`S2-file:${a}`, () => fs.existsSync(new URL(a, root)), '资产文件真实存在');
+});
+
+// ================================================================ v2.17：4 道新配方 + 通用合成台 + 一键提交
+section('V217 新配方数据：与需求表逐字段一致', () => {
+  const want = {
+    cheeseFries: { type: 'food', station: 'food', inputs: ['fries', 'cheese'], price: 9, thisCost: 2, chainCost: 4, net: 5 },
+    latte: { type: 'drink', station: 'drink', inputs: ['coffee', 'milk'], price: 9, thisCost: 2, chainCost: 5, net: 4 },
+    milkTea: { type: 'drink', station: 'drink', inputs: ['tea', 'milk'], price: 8, thisCost: 2, chainCost: 4, net: 4 },
+    hashBrown: { type: 'food', station: 'food', inputs: ['potato', 'ketchup'], price: 6, thisCost: 2, chainCost: 2, net: 4 },
+  };
+  for (const [id, w] of Object.entries(want)) {
+    const r = ctx.byId.get(id);
+    ok(`V217-${id}-exists`, () => !!r, `${id} 在配方表里`);
+    eq(`V217-${id}`, () => ({ type: r.type, station: r.station, inputs: r.inputs, price: r.price, thisCost: r.thisCost, chainCost: r.chainCost, net: r.net }), w, `${id} 数值与需求表一致`);
+  }
+  // 净利口径自洽：net = price − chainCost（全表 18 条）
+  eq('V217-net', () => ctx.crafts.recipes.filter((r) => r.price != null && r.net !== r.price - r.chainCost).map((r) => r.id), [], '所有可售配方 net = price − chainCost');
+  // thisCost 语义：只算本次新投的**叶食材**（已沉没的成品/半成品不再扣）
+  const leafSum = (r) => r.inputs.reduce((a, k) => a + ctx.leafCost(k), 0);
+  eq('V217-thisCost', () => Object.keys(want).filter((id) => ctx.byId.get(id).thisCost !== leafSum(ctx.byId.get(id))), [], '四条新配方的 thisCost = 本次投入的叶食材成本之和');
+  // 本次硬约束：不新增原料种类
+  eq('V217-14leaves', Object.keys(ctx.config.ingredients).length, 14, '原料仍为 14 种（本批未新增）');
+  // 18 条配方 → 18 个互不相同的两料 key（新输入对没和旧配方撞车，table 不会互相覆盖）
+  eq('V217-table', ctx.table.size, ctx.crafts.recipes.length, '合成表 key 数 == 配方数（无重复输入对）');
+  eq('V217-table18', ctx.table.size, 18, '合成表共 18 条（14 旧 + 4 新）');
+  // 旧 14 条配方一个字都没动（按 id 存在 + 净利口径）
+  eq('V217-old-intact', () => ['burger', 'vegPatty', 'signatureBurger', 'fries', 'cola', 'icedCola', 'coffee', 'salad', 'pizzaBase', 'pizza', 'iceCream', 'milkshake', 'tea', 'icedTea'].filter((id) => !ctx.byId.has(id)), [], '原有 14 条配方全部还在');
+  eq('V217-eqclass', () => ctx.crafts.equivalenceClasses.map((e) => e.order), ['cola', 'icedCola'], '等价类未被改动');
+});
+
+section('V217 新配方：引擎实际扣费与产出（实跑，不看静态数字）', () => {
+  const cases = [
+    { id: 'cheeseFries', station: 'food', sunk: 'fries', add: 'cheese' },
+    { id: 'latte', station: 'drink', sunk: 'coffee', add: 'milk' },
+    { id: 'milkTea', station: 'drink', sunk: 'tea', add: 'milk' },
+    { id: 'hashBrown', station: 'food', sunk: 'potato', add: 'ketchup' },
+  ];
+  for (const c of cases) {
+    const g = newGame();
+    // 已沉没的那一件先摆进输入格（模拟「上一个成品 / 已扣过钱的叶食材」）
+    const before = g.s.coins;
+    g.s.stations[c.station].inputs[0] = g.mkItem(c.sunk);
+    const r = g.addIngredient(c.add, c.station, 1);
+    ok(`V217-run-${c.id}-ok`, () => r.ok === true, `${c.id} 投料成功`);
+    eq(`V217-run-${c.id}-cost`, () => before - g.s.coins, ctx.byId.get(c.id).thisCost, `${c.id} 本次实扣 = thisCost ${ctx.byId.get(c.id).thisCost}`);
+    wait(g, g.stoveMs + 5);
+    eq(`V217-run-${c.id}-out`, () => g.s.stations[c.station].output && g.s.stations[c.station].output.key, c.id, `${c.id} 产出正确`);
+  }
+});
+
+section('V217 通用合成台：通吃 / 读条 ×1.5 / 拒绝中间产物 / 存档往返', () => {
+  const g = newGame();
+  ok('V217-uni-exists', () => !!g.s.stations.universal, 'newRun 按 config.stations 生成了 universal 工位');
+  eq('V217-uni-slots', () => g.s.stations.universal.inputs.length, ctx.config.stations.universal.inputSlots, '通用台输入格数读配置');
+  eq('V217-uni-cfg', () => [g.stationAcceptsAll('universal'), g.stationForbidsIntermediate('universal'), ctx.config.stations.universal.timeFactor], [true, false, [1.5, 1.45, 1.4, 1.35]], '通用台：通吃 / 禁中间产物已关 / 读条系数按灶台等级递减 1.5→1.35');
+
+  // ① 通吃：食物料与甜品料都能投；专用台的老行为不变
+  const g2 = newGame();
+  const r1 = g2.addIngredient('bread', 'universal', 0);
+  const r2 = g2.addIngredient('syrup', 'universal', 1);
+  ok('V217-uni-both', () => r1.ok && r2.ok, '面包（食物料）与糖浆（甜品料）都能投进通用台');
+  // 归属提示用干净局单独验（上面那一对已经合成，输出槽被占会遮住判定）
+  const g2b = newGame();
+  eq('V217-uni-mismatch-leaf', g2b.stationMismatch('tomato', 'universal'), null, '通用台对任何叶食材都不报 wrongStation');
+  eq('V217-uni-mismatch-prod', g2b.stationMismatch('burger', 'universal'), null, '通用台对任何成品都不报 wrongStation');
+  eq('V217-uni-oldguard', () => g2b.stationMismatch('syrup', 'food').reason, 'wrongStation', '食物台仍然拦甜品料（原有归属提示没被放宽）');
+  eq('V217-uni-oldguard2', () => g2b.stationMismatch('cheese', 'drink').reason, 'wrongStation', '甜品台仍然拦食物料');
+
+  // ② 点击（不给 stationKey）仍按配方归属自动选台，不会被通用台抢走
+  const g3 = newGame();
+  g3.addIngredient('potato');
+  eq('V217-click-auto', () => g3.s.stations.food.inputs.filter(Boolean).map((i) => i.key), ['potato'], '点击土豆仍自动进食物台');
+  eq('V217-click-uni-empty', () => g3.s.stations.universal.inputs.filter(Boolean).length, 0, '通用台不会被点击自动投料（必须玩家显式拖/点过去）');
+
+  // ③ 读条 = stoveMs × 1.5，且随炉灶等级同步变化
+  const g4 = newGame();
+  g4.addIngredient('potato', 'universal', 0);
+  g4.addIngredient('ketchup', 'universal', 1);
+  eq('V217-uni-dur', () => g4.s.stations.universal.duration, Math.round(g4.stoveMs * 1.5), '通用台读条 = stoveMs × 1.5');
+  ok('V217-uni-busy', () => g4.s.stations.universal.busy === true, '两格投满自动开始读条');
+  const g5 = newGame();
+  g5.s.devices.stove = ctx.config.devices.stove.values.length; // 满级炉灶
+  g5.addIngredient('potato', 'universal', 0);
+  g5.addIngredient('ketchup', 'universal', 1);
+  eq('V217-uni-dur-max', () => g5.s.stations.universal.duration, Math.round(g5.stoveMs * 1.35), '满级炉灶下通用台 = stoveMs × 1.35（系数随灶台等级收敛到 1.35）');
+  ok('V217-uni-dur-faster', () => g5.s.stations.universal.duration < g4.s.stations.universal.duration, '炉灶升级后通用台跟着变快');
+  // 专用台不受 1.5 影响（食物台读条仍是 stoveMs）
+  const g5b = newGame();
+  g5b.addIngredient('potato', 'food', 0);
+  g5b.addIngredient('potato', 'food', 1);
+  eq('V217-food-dur', () => g5b.s.stations.food.duration, Math.round(g5b.stoveMs), '食物台读条仍是 stoveMs（系数没被带偏）');
+
+  // ④ 通用台既做饭也做饮品
+  const g6 = newGame();
+  g6.addIngredient('potato', 'universal', 0);
+  g6.addIngredient('ketchup', 'universal', 1);
+  wait(g6, Math.round(g6.stoveMs * 1.5) + 5);
+  eq('V217-uni-food', () => g6.s.stations.universal.output.key, 'hashBrown', '通用台能做饭（薯饼）');
+  const g7 = newGame();
+  g7.addIngredient('syrup', 'universal', 0);
+  g7.addIngredient('water', 'universal', 1);
+  wait(g7, Math.round(g7.stoveMs * 1.5) + 5);
+  eq('V217-uni-drink', () => g7.s.stations.universal.output.key, 'cola', '通用台能做饮品（可乐）');
+
+  // ⑤ 中间产物（v2.18 口径反转）：通用台**可以**做半成品了，但读条按
+  //    stoveMs × intermediateStepFactor(0.65) × timeFactor(1.5) 乘算 —— 「通用台更慢」这个代价保留。
+  //    旧口径（forbidsIntermediate 在投料阶段就拦）已随本轮需求作废，断言改成反向判据。
+  const g8 = newGame();
+  g8.s.stations.universal.inputs[0] = g8.mkItem('lettuce');
+  const coins8 = g8.s.coins;
+  const r8 = g8.addIngredient('patty', 'universal', 1);
+  eq('V217-uni-inter', () => [r8.ok, g8.s.stations.universal.busy, g8.s.stations.universal.pendingId],
+    [true, true, 'vegPatty'], '通用台现在能做「生菜+肉饼（菜肉饼）」并开始读条');
+  // v2.19.3：timeFactor 变成「按灶台等级取值」的数组，这里按当前等级取对应档位再乘
+  const uniFactorAt = (gg) => {
+    const tf = ctx.config.stations.universal.timeFactor;
+    return Array.isArray(tf) ? tf[gg.s.devices.stove - 1] : tf;
+  };
+  eq('V217-uni-inter-dur', () => g8.s.stations.universal.duration,
+    Math.round(g8.stoveMs * ctx.config.crafting.intermediateStepFactor * uniFactorAt(g8)),
+    '通用台做半成品的读条 = stoveMs × 0.65 × 当前等级系数（乘算，仍比专用台慢）');
+  ok('V217-uni-inter-coins', () => g8.s.coins === coins8 - 3, '投料照常扣本次成本（3）');
+  // 同一对在食物台照做，读条仍只乘 0.65（专用台 timeFactor = 1）
+  const g9 = newGame();
+  g9.addIngredient('lettuce', 'food', 0);
+  const r9 = g9.addIngredient('patty', 'food', 1);
+  ok('V217-food-still-inter', () => r9.ok === true && g9.s.stations.food.busy === true && g9.s.stations.food.pendingId === 'vegPatty', '食物台仍可正常做菜肉饼');
+  eq('V217-food-inter-dur', () => g9.s.stations.food.duration, Math.round(g9.stoveMs * ctx.config.crafting.intermediateStepFactor),
+    '食物台做半成品的读条仍是 stoveMs × 0.65（timeFactor=1，不受影响）');
+  // 饼底同理：通用台也能做
+  const g10 = newGame();
+  g10.s.stations.universal.inputs[0] = g10.mkItem('dough');
+  eq('V217-uni-inter2', () => [g10.addIngredient('ketchup', 'universal', 1).ok, g10.s.stations.universal.pendingId],
+    [true, 'pizzaBase'], '通用台也能做「面团+番茄酱（饼底）」');
+  // 半成品真的能产出来（不是只进读条）
+  const g10c = newGame();
+  g10c.addIngredient('lettuce', 'universal', 0);
+  g10c.addIngredient('patty', 'universal', 1);
+  wait(g10c, g10c.s.stations.universal.duration + 5);
+  eq('V217-uni-inter-out', () => g10c.s.stations.universal.output && g10c.s.stations.universal.output.key, 'vegPatty',
+    '通用台真的产出一份菜肉饼');
+  // 已做好的中间产物仍可当输入，做出成品
+  const g10b = newGame();
+  g10b.s.stations.universal.inputs[0] = g10b.mkItem('pizzaBase');
+  const r10b = g10b.addIngredient('cheese', 'universal', 1);
+  ok('V217-uni-inter-input', () => r10b.ok === true && g10b.s.stations.universal.pendingId === 'pizza', '通用台接受已有半成品做输入（饼底+芝士=披萨）');
+
+  // ⑥ 存档往返：通用台与其它工位一视同仁
+  const g11 = newGame();
+  g11.s.stations.universal.inputs[0] = g11.mkItem('bread');
+  g11.s.stations.universal.output = g11.mkItem('hashBrown');
+  const g12 = new Game(ctx);
+  g12.tutorialDone = true;
+  ok('V217-uni-resume', () => g12.resume(g11.snapshot()) === true, '带通用台的存档可恢复');
+  eq('V217-uni-resume-out', () => g12.s.stations.universal.output.key, 'hashBrown', '通用台输出槽随存档恢复');
+  eq('V217-uni-resume-in', () => g12.s.stations.universal.inputs[0].key, 'bread', '通用台输入格随存档恢复');
+});
+
+section('V217 一键提交：最急顾客优先 / 等价类 / 只交成品 / 口径与手操一致', () => {
+  // ① 只交可售成品：半成品与失败品一律跳过
+  const g = newGame();
+  addPlainCustomer(g, ['burger']);
+  g.s.storage.push(g.mkItem('vegPatty'), g.mkItem('fail'));
+  eq('V217-sub-empty', () => g.submitFromStorage(), { ok: false, reason: 'empty' }, '仓库里只有半成品/失败品 → 不交，返回 empty');
+  eq('V217-sub-empty-keep', () => g.s.storage.length, 2, '仓库里那两件原样没动');
+
+  // ② 没有顾客 / 有顾客但货不对口
+  const g2 = newGame();
+  g2.s.storage.push(g2.mkItem('burger'));
+  eq('V217-sub-nocustomer', () => g2.submitFromStorage(), { ok: false, reason: 'noCustomer' }, '没有排队顾客 → noCustomer');
+  const g3 = newGame();
+  addPlainCustomer(g3, ['salad']);
+  g3.s.storage.push(g3.mkItem('pizza'));
+  eq('V217-sub-nomatch', () => g3.submitFromStorage(), { ok: false, reason: 'noMatch' }, '货不对口 → noMatch');
+  const g3b = newGame();
+  g3b.s.phase = 'dayEnd';
+  eq('V217-sub-phase', () => g3b.submitFromStorage().reason, 'phase', '非营业中不提交');
+
+  // ③ 最急的优先：两位顾客抢同一件货，剩余耐心少的先拿到
+  const g4 = newGame();
+  const calm = addPlainCustomer(g4, ['burger']);
+  const urgent = addPlainCustomer(g4, ['burger']);
+  calm.patience = 30000;
+  urgent.patience = 4000;
+  g4.s.storage.push(g4.mkItem('burger'));
+  const r4 = g4.submitFromStorage();
+  eq('V217-sub-count', () => [r4.ok, r4.count, r4.orders], [true, 1, 1], '交出一件并结算一单');
+  eq('V217-sub-urgent', () => g4.s.customers.map((c) => c.id), [calm.id], '最急的（耐心 4000）先拿到，耐心的那位还在等');
+  ok('V217-sub-urgent-done', () => urgent.items.every((x) => x.filled) && g4.s.dayStats.served === 1, '急单已按既有 settle 口径结算');
+
+  // ④ 一单两件：一件一件交完，count=2 / orders=1
+  const g5 = newGame();
+  addPlainCustomer(g5, ['burger', 'cola']);
+  g5.s.storage.push(g5.mkItem('cola'), g5.mkItem('burger'), g5.mkItem('fries'));
+  const r5 = g5.submitFromStorage();
+  eq('V217-sub-two', () => [r5.count, r5.orders], [2, 1], '一单两件：交 2 件、结算 1 单');
+  eq('V217-sub-two-left', () => g5.s.storage.map((i) => i.key), ['fries'], '没有顾客要的那件留在仓库里');
+  eq('V217-sub-two-done', () => g5.s.customers.length, 0, '整单交完顾客离场');
+
+  // ⑤ 等价类：顾客要 cola，仓库里的 icedCola 可以交，结算按实际商品价
+  const g6 = newGame();
+  let seen = null;
+  g6.on('served', (d) => { seen = d; });
+  addPlainCustomer(g6, ['cola']);
+  g6.s.storage.push(g6.mkItem('icedCola'));
+  const r6 = g6.submitFromStorage();
+  ok('V217-sub-eq-ok', () => r6.ok === true, '冰可乐满足「要可乐」的订单');
+  eq('V217-sub-eq-fill', () => seen && seen.customer.items[0].filled, 'icedCola', '交付记录写实际商品 icedCola');
+  // 饮品还有天气溢价（weatherCfg.drinkPriceMul），所以期望值 = 实际商品价 × 当日饮品倍率
+  eq('V217-sub-eq-price', () => seen && seen.base, ctx.priceOf('icedCola') * g6.weatherCfg().drinkPriceMul, '结算按实际商品价（icedCola 6）而不是订单价（cola 4）');
+
+  // ⑥ 外卖不参与
+  const g7 = newGame();
+  addPlainCustomer(g7, ['burger']);
+  g7.s.deliveries = [{ id: -1, status: 'rider_arrived', item: 'burger', phoneAt: 0, riderAt: 0, effectiveWait: 10000, deliveredAt: 0 }];
+  g7.s.storage.push(g7.mkItem('burger'));
+  g7.submitFromStorage();
+  eq('V217-sub-nodelivery', () => g7.s.deliveries[0].status, 'rider_arrived', '外卖订单不参与一键提交（只服务队列里的顾客）');
+
+  // ⑦ 连击 / 日统计 / 成就计数器与手操同一口径
+  const g8 = newGame();
+  addPlainCustomer(g8, ['burger']);
+  g8.s.storage.push(g8.mkItem('burger'));
+  const coins8 = g8.s.coins;
+  g8.submitFromStorage();
+  ok('V217-sub-settle', () => g8.s.combo === 1 && g8.s.dayStats.served === 1 && g8.s.coins > coins8, '连击 +1、日统计 +1、金币增加（复用 settle）');
+  eq('V217-sub-ach', () => g8.s.ach.orders, 1, '成就计数器 orders +1（与手操交付一致）');
+
+  // ⑧ 教学顾客不被自动交掉（教学单必须玩家亲手递）
+  const g9 = newGame();
+  const tut = addPlainCustomer(g9, ['burger']);
+  tut.tutorial = true;
+  g9.s.storage.push(g9.mkItem('burger'));
+  eq('V217-sub-tutorial', () => g9.submitFromStorage().reason, 'noCustomer', '只有教学顾客时视为「没有排队顾客」');
+  ok('V217-sub-tutorial-keep', () => g9.s.storage.length === 1 && !tut.items[0].filled, '教学顾客的订单没有被自动填');
+});
+
+// ================================================================ v2.17.1：当日菜单订单池数据化 + 新菜入池
+section('V217.1 当日菜单池：食物池读配置 / 新菜入池 / 池子真的被采样', () => {
+  const dl = ctx.config.meta.dayLoop;
+
+  // ① 池子内容：四道新菜都进池，且池里没有未知 id
+  ok('V2171-pool-food', () => ['hashBrown', 'cheeseFries'].every((id) => dl.foodPool.includes(id) && dl.foodPoolHard.includes(id)), '两道新主食同时进普通 / 困难食物池');
+  ok('V2171-pool-drink', () => ['latte', 'milkTea'].every((id) => dl.drinkPool.includes(id)), '两道新饮品进入饮品池');
+  eq('V2171-pool-unknown', () => [...new Set([...dl.foodPool, ...dl.foodPoolHard, ...dl.drinkPool])].filter((id) => !ctx.byId.has(id)), [], '池里没有未知 / 非配方 id');
+  // 天气偏好按 coldDrinks/hotDrinks 判定，新热饮不进表就恒为 neutral（天气完全不影响它们）
+  ok('V2171-hot', () => ['latte', 'milkTea'].every((id) => ctx.config.weather.hotDrinks.includes(id)), '两道新热饮进 hotDrinks（否则天气偏好对它们失效）');
+
+  // ② 兜底：配置里抽掉 foodPool / foodPoolHard 时，回落到旧的硬编码数组，不炸也不空菜单
+  const cfg2 = {
+    ...ctx.config,
+    meta: { ...ctx.config.meta, dayLoop: { ...dl, foodPool: undefined, foodPoolHard: undefined } },
+  };
+  const ctx2 = buildCtx(cfg2, ctx.crafts, ctx.layout, ctx.i18n);
+  const g2 = new Game(ctx2);
+  g2.tutorialDone = true;
+  g2.newRun('hard', 1);
+  eq('V2171-fallback', () => [g2.s.menu.foods[0], g2.s.menu.foods.length, g2.s.menu.drinks.length], ['signatureBurger', 3, 3], '配置缺食物池时回落到旧硬编码池（菜单仍是 3+3）');
+
+  // ③ 21 个（周, 天）种子全覆盖：主菜固定、其余只从池里抽、不重复、不越池，
+  //    并且池内每道菜（含四道新菜）都真的被排上过 —— 证明池子不是摆设。
+  for (const spec of [
+    { mode: 'normal', poolKey: 'foodPool', main: 'burger' },
+    { mode: 'hard', poolKey: 'foodPoolHard', main: 'signatureBurger' },
+  ]) {
+    const gg = newGame(spec.mode);
+    const pool = dl[spec.poolKey];
+    const seenFood = new Set();
+    const seenDrink = new Set();
+    const bad = [];
+    for (let w = 1; w <= 3; w++) {
+      for (let d = 1; d <= 7; d++) {
+        gg.s.week = w;
+        gg.s.menu = null;        // 强制重抽当日菜单（同 mode|week|day 必得同一串）
+        gg.startDay(d);
+        const m = gg.s.menu;
+        const tag = `w${w}d${d}`;
+        if (m.foods[0] !== spec.main) bad.push(`${tag}:主菜=${m.foods[0]}`);
+        if (m.drinks[0] !== 'cola') bad.push(`${tag}:可乐缺席`);
+        if (m.foods.length !== 3 || m.drinks.length !== 3) bad.push(`${tag}:长度=${m.foods.length}/${m.drinks.length}`);
+        if (new Set(m.foods).size !== 3 || new Set(m.drinks).size !== 3) bad.push(`${tag}:重复`);
+        if (!m.foods.slice(1).every((id) => pool.includes(id))) bad.push(`${tag}:主食越池`);
+        if (!m.drinks.slice(1).every((id) => dl.drinkPool.includes(id))) bad.push(`${tag}:饮品越池`);
+        m.foods.forEach((id) => seenFood.add(id));
+        m.drinks.forEach((id) => seenDrink.add(id));
+      }
+    }
+    eq(`V2171-menu-${spec.mode}`, bad, [], `${spec.mode}：21 个日种子下菜单结构全部合规（主菜固定 / 只从池里抽 / 不重复）`);
+    ok(`V2171-cover-${spec.mode}`, () => ['hashBrown', 'cheeseFries', 'latte', 'milkTea'].every((id) => seenFood.has(id) || seenDrink.has(id)), `${spec.mode}：四道新菜在 21 天里都真的被排上过`);
+    ok(`V2171-sample-${spec.mode}`, () => pool.every((id) => seenFood.has(id)) && dl.drinkPool.every((id) => seenDrink.has(id)), `${spec.mode}：池内每道菜 21 天内都出现过（池子确实在被采样）`);
+  }
+
+  // ④ 新菜真的能被下单：把某天菜单钉成含新菜的组合，顾客就会点它们
+  const gd = newGame();
+  gd.s.menu = { foods: ['burger', 'cheeseFries', 'hashBrown'], drinks: ['cola', 'latte', 'milkTea'], main: 'burger', mainDrink: 'cola' };
+  gd.s.customers = [];
+  const wanted = new Set();
+  for (let i = 0; i < 300; i++) {
+    const c = gd.spawnCustomer();
+    c.items.forEach((sl) => { if (sl.wants) wanted.add(sl.wants); });
+  }
+  ok('V2171-order-new', () => ['cheeseFries', 'hashBrown', 'latte', 'milkTea'].every((id) => wanted.has(id)), '菜单含新菜时顾客真会点它们（订单闭环）');
+  eq('V2171-order-scope', () => [...wanted].filter((id) => ![...gd.s.menu.foods, ...gd.s.menu.drinks].includes(id)), [], '顾客只会点当日菜单里的菜');
 });
 
 finish('结果');

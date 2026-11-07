@@ -13,13 +13,21 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="小灶" />
+  <meta name="apple-mobile-web-app-title" content="食合物语" />
   <meta name="theme-color" content="#2B2B2B" />
 
   <link rel="stylesheet" href="./src/style.css" />
 </head>
 <body>
-  <div id="stage"></div>
+  <!-- v2.20.0 安全区包裹层：inset 到 env(safe-area-inset-*) 内侧。
+       桌面 / 平板 / 无刘海手机的四个 env() 全部为 0，因此 #safe 就等于整个视口，
+       行为与改动前完全一致；手机横屏有刘海或圆角时，游戏区整体内缩，
+       HUD 按钮 / 外卖手机 / 金币胶囊不再被压住。
+       fitStage() 也改为按 #safe 的 clientWidth/clientHeight 计算缩放（不能用 innerWidth，
+       否则算出来的可用区还是满屏，内缩等于白做）。 -->
+  <div id="safe">
+    <div id="stage"></div>
+  </div>
 
   <!-- 竖屏提示：横版游戏，请把设备横过来 -->
   <div id="rotate-hint" class="hidden">
